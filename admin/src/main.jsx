@@ -269,16 +269,16 @@ function Stat({ label, value }) {
 }
 
 function EventTexts({ event, onSaved }) {
-  const [texts, setTexts] = useState({ description: '', invite_text: '', declined_text: '' });
+  const [texts, setTexts] = useState({});
   const [saved, setSaved] = useState(false);
-  useEffect(() => setTexts({ description: event.description || '', invite_text: event.invite_text || '', declined_text: event.declined_text || '' }), [event]);
+  useEffect(() => setTexts({ description: event.description || '', invite_text: event.invite_text || '', expired_text: event.expired_text || '', confirmed_text: event.confirmed_text || '', reminder_text: event.reminder_text || '', declined_text: event.declined_text || '' }), [event]);
   const save = async e => {
     e.preventDefault();
     await request(`/api/admin/events/${event.id}/texts`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(texts) });
     setSaved(true); onSaved(); window.setTimeout(() => setSaved(false), 1800);
   };
   const field = (key, title, hint) => <label className="grid gap-1.5 text-sm font-medium">{title}<Textarea value={texts[key]} onChange={e => setTexts({ ...texts, [key]: e.target.value })} placeholder={hint}/></label>;
-  return <Card className="mt-6"><CardHeader><CardTitle>Тексты события</CardTitle><CardDescription>Используйте <code>{'{event}'}</code> в приглашении — бот подставит название мероприятия.</CardDescription></CardHeader><CardContent><form onSubmit={save} className="grid gap-5">{field('description', 'Карточка мероприятия', 'Что увидит человек перед подачей заявки')}{field('invite_text', 'Приглашение', 'Приглашение на {event}')}{field('declined_text', 'Отказ', 'Спасибо, что сообщили. Будем рады видеть вас на следующих мероприятиях!')}<div><Button>{saved ? <Check size={15}/> : null}{saved ? 'Сохранено' : 'Сохранить тексты'}</Button></div></form></CardContent></Card>;
+  return <form onSubmit={save} className="mt-6 grid gap-5"><Card><CardHeader><CardTitle>Регистрация</CardTitle><CardDescription>Текст карточки, которую человек увидит перед подачей заявки.</CardDescription></CardHeader><CardContent>{field('description', 'Карточка мероприятия', 'Расскажите, что будет на событии')}</CardContent></Card><Card><CardHeader><CardTitle>Приглашение</CardTitle><CardDescription>Все сообщения, связанные с вашим решением по заявке.</CardDescription></CardHeader><CardContent className="grid gap-5">{field('invite_text', 'Текст приглашения', 'Мы будем рады видеть вас на {event}!')}{field('expired_text', 'Нет ответа 24 часа', 'К сожалению, мы не дождались вашего ответа и освобождаем место.')}{field('confirmed_text', 'Участие подтверждено', 'Участие подтверждено — место закреплено за вами.')}{field('declined_text', 'Пользователь отказался', 'Спасибо, что сообщили. Будем рады видеть вас на следующих мероприятиях!')}</CardContent></Card><Card><CardHeader><CardTitle>Напоминание за сутки</CardTitle><CardDescription>Бот отправит это сообщение и предложит финально подтвердить участие или отказаться.</CardDescription></CardHeader><CardContent>{field('reminder_text', 'Текст напоминания', 'Напоминаем: «{event}» уже завтра. Ждём вас!')}</CardContent></Card><div><Button>{saved ? <Check size={15}/> : null}{saved ? 'Сохранено' : 'Сохранить тексты'}</Button></div></form>;
 }
 
 function App() {

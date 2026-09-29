@@ -29,7 +29,7 @@ db.exec(`
 CREATE TABLE IF NOT EXISTS events (
   id INTEGER PRIMARY KEY, title TEXT NOT NULL, starts_at TEXT NOT NULL,
   description TEXT, venue TEXT, chat_url TEXT, cover_stored_name TEXT, cover_original_name TEXT, registration_text TEXT, received_text TEXT,
-  invite_text TEXT, confirmed_text TEXT, declined_text TEXT, reminder_text TEXT,
+  invite_text TEXT, expired_text TEXT, confirmed_text TEXT, declined_text TEXT, reminder_text TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS applicants (
@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS invitations (
   id INTEGER PRIMARY KEY, applicant_id INTEGER NOT NULL UNIQUE REFERENCES applicants(id),
   status TEXT NOT NULL DEFAULT 'pending', expires_at TEXT NOT NULL,
   responded_at TEXT, reminder_sent_at TEXT, checkin_token TEXT UNIQUE,
+  final_confirmed_at TEXT,
   checked_in_at TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS application_drafts (
@@ -62,6 +63,7 @@ for (const [table, column, definition] of [
   ['events', 'description', 'TEXT'], ['events', 'venue', 'TEXT'], ['applicants', 'phone', 'TEXT'],
   ['events', 'registration_text', 'TEXT'], ['events', 'received_text', 'TEXT'], ['events', 'invite_text', 'TEXT'],
   ['events', 'confirmed_text', 'TEXT'], ['events', 'declined_text', 'TEXT'], ['events', 'reminder_text', 'TEXT'],
+  ['events', 'expired_text', 'TEXT'], ['invitations', 'final_confirmed_at', 'TEXT'],
   ['events', 'cover_stored_name', 'TEXT'], ['events', 'cover_original_name', 'TEXT'],
 ]) {
   try { db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`); } catch { /* already exists */ }
@@ -75,6 +77,7 @@ const defaultText = {
   invite: 'Мы будем рады видеть вас на мероприятии «{event}»!\n\nПодтвердите участие в течение 24 часов, пожалуйста.',
   confirmed: 'Участие подтверждено — место закреплено за вами. За сутки до мероприятия придёт напоминание.',
   declined: 'Спасибо, что сообщили. Мы будем рады видеть вас на следующих мероприятиях!',
+  expired: 'К сожалению, мы не дождались вашего ответа и освобождаем место. Будем рады видеть вас на следующих мероприятиях!',
   reminder: 'Напоминаем: «{event}» уже завтра. Ждём вас!',
 };
 const eventText = (event, key) => (event[`${key}_text`] || defaultText[key]).replaceAll('{event}', event.title);
@@ -170,12 +173,29 @@ bot.callbackQuery(/^answer:(yes|no):(\d+)$/, async ctx => {
     db.prepare("UPDATE invitations SET status='confirmed', responded_at=?, checkin_token=? WHERE id=?").run(nowIso(), checkinToken, id);
     db.prepare("UPDATE applicants SET status='confirmed' WHERE id=?").run(row.applicant_id);
     const qr = await QRCode.toBuffer(checkinToken, { width: 700, margin: 2 });
-    await ctx.editMessageText(eventText(row, 'confirmed'));
+    await ctx.editMessageText(eventText(row, 'confirmed'), { reply_markup: new InlineKeyboard().text('Не смогу прийти', `cancel:${id}`) });
     if (row.chat_url) await ctx.reply(`Пока можете присоединиться к чату мероприятия: ${row.chat_url}`);
     await sendAssets(row.telegram_id, row.event_id, 'confirmed');
     await ctx.replyWithPhoto(new Uint8Array(qr), { caption: `Ваш QR для входа на «${row.title}». Сохраните его.\nРезервный код: ${checkinToken.slice(0, 8).toUpperCase()}` });
   }
   return ctx.answerCallbackQuery();
+});
+
+bot.callbackQuery(/^cancel:(\d+)$/, async ctx => {
+  const row = db.prepare(`SELECT i.*, a.telegram_id, a.id applicant_id, e.title, e.declined_text FROM invitations i JOIN applicants a ON a.id=i.applicant_id JOIN events e ON e.id=a.event_id WHERE i.id=?`).get(ctx.match[1]);
+  if (!row || row.telegram_id !== String(ctx.from.id) || row.status !== 'confirmed') return ctx.answerCallbackQuery({ text: 'Это участие уже нельзя отменить.', show_alert: true });
+  db.prepare("UPDATE invitations SET status='declined', responded_at=? WHERE id=?").run(nowIso(), row.id);
+  db.prepare("UPDATE applicants SET status='declined' WHERE id=?").run(row.applicant_id);
+  await ctx.editMessageText(eventText(row, 'declined'));
+  return ctx.answerCallbackQuery();
+});
+bot.callbackQuery(/^final:(yes|no):(\d+)$/, async ctx => {
+  const [, answer, id] = ctx.match;
+  const row = db.prepare('SELECT i.*, a.telegram_id, a.id applicant_id, e.declined_text, e.title FROM invitations i JOIN applicants a ON a.id=i.applicant_id JOIN events e ON e.id=a.event_id WHERE i.id=?').get(id);
+  if (!row || row.telegram_id !== String(ctx.from.id) || row.status !== 'confirmed') return ctx.answerCallbackQuery({ text: 'Приглашение не найдено.', show_alert: true });
+  if (answer === 'no') { db.prepare("UPDATE invitations SET status='declined', responded_at=? WHERE id=?").run(nowIso(), id); db.prepare("UPDATE applicants SET status='declined' WHERE id=?").run(row.applicant_id); await ctx.editMessageText(eventText(row, 'declined')); return ctx.answerCallbackQuery(); }
+  db.prepare('UPDATE invitations SET final_confirmed_at=? WHERE id=?').run(nowIso(), id);
+  await ctx.editMessageText('Спасибо, ждём вас на мероприятии!'); return ctx.answerCallbackQuery();
 });
 
 async function sendInvite(applicantId) {
@@ -195,11 +215,11 @@ async function sendInvite(applicantId) {
 }
 
 async function runAutomation() {
-  const expired = db.prepare("SELECT i.*, a.telegram_id, a.id applicant_id FROM invitations i JOIN applicants a ON a.id=i.applicant_id WHERE i.status='pending' AND i.expires_at <= ?").all(nowIso());
+  const expired = db.prepare("SELECT i.*, a.telegram_id, a.id applicant_id, e.title, e.expired_text FROM invitations i JOIN applicants a ON a.id=i.applicant_id JOIN events e ON e.id=a.event_id WHERE i.status='pending' AND i.expires_at <= ?").all(nowIso());
   for (const row of expired) {
     db.prepare("UPDATE invitations SET status='expired' WHERE id=?").run(row.id);
     db.prepare("UPDATE applicants SET status='expired' WHERE id=?").run(row.applicant_id);
-    if (row.telegram_id) await bot.api.sendMessage(row.telegram_id, 'К сожалению, мы не дождались вашего ответа и освобождаем место. Будем рады видеть вас на следующих мероприятиях!').catch(console.error);
+    if (row.telegram_id) await bot.api.sendMessage(row.telegram_id, eventText(row, 'expired')).catch(console.error);
   }
   const upcoming = db.prepare(`SELECT i.*, a.telegram_id, e.id AS event_id, e.title, e.starts_at, e.reminder_text FROM invitations i
     JOIN applicants a ON a.id=i.applicant_id JOIN events e ON e.id=a.event_id
@@ -207,7 +227,8 @@ async function runAutomation() {
     .all(nowIso(), new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString());
   for (const row of upcoming) {
     if (row.telegram_id) {
-      await bot.api.sendMessage(row.telegram_id, eventText(row, 'reminder')).catch(console.error);
+      const keyboard = new InlineKeyboard().text('Буду', `final:yes:${row.id}`).text('Не смогу прийти', `final:no:${row.id}`);
+      await bot.api.sendMessage(row.telegram_id, eventText(row, 'reminder'), { reply_markup: keyboard }).catch(console.error);
       await sendAssets(row.telegram_id, row.event_id, 'reminder');
     }
     db.prepare('UPDATE invitations SET reminder_sent_at=? WHERE id=?').run(nowIso(), row.id);
@@ -270,8 +291,8 @@ app.post('/admin/events/:id/settings', adminOnly, (req, res) => {
   res.redirect(`/admin?event=${req.params.id}`);
 });
 app.post('/api/admin/events/:id/texts', adminOnly, (req, res) => {
-  db.prepare('UPDATE events SET description=?, invite_text=?, declined_text=? WHERE id=?')
-    .run(req.body.description || null, req.body.invite_text || null, req.body.declined_text || null, req.params.id);
+  db.prepare('UPDATE events SET description=?, invite_text=?, expired_text=?, confirmed_text=?, reminder_text=?, declined_text=? WHERE id=?')
+    .run(req.body.description || null, req.body.invite_text || null, req.body.expired_text || null, req.body.confirmed_text || null, req.body.reminder_text || null, req.body.declined_text || null, req.params.id);
   res.json({ ok: true });
 });
 app.post('/admin/events/:id/assets', adminOnly, upload.single('material'), (req, res) => {
