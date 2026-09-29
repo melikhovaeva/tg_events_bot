@@ -216,7 +216,15 @@ const upload = multer({
 });
 app.use(express.urlencoded({ extended: false }));
 app.get('/', (_, res) => res.redirect('/admin'));
-app.get('/admin', adminOnly, (req, res) => {
+app.get('/api/admin/state', adminOnly, (req, res) => {
+  const events = db.prepare('SELECT * FROM events ORDER BY starts_at DESC').all();
+  const selected = Number(req.query.event || events[0]?.id);
+  const people = selected ? db.prepare(`SELECT a.*, i.id invitation_id, i.status invitation_status, i.expires_at, i.checked_in_at
+    FROM applicants a LEFT JOIN invitations i ON i.applicant_id=a.id WHERE a.event_id=? ORDER BY a.created_at DESC`).all(selected) : [];
+  const assets = selected ? db.prepare('SELECT * FROM event_assets WHERE event_id=? ORDER BY created_at DESC').all(selected) : [];
+  res.json({ events, selected, people, assets, botUsername: process.env.BOT_USERNAME });
+});
+app.get('/admin/legacy', adminOnly, (req, res) => {
   const events = db.prepare('SELECT * FROM events ORDER BY starts_at DESC').all();
   const selected = Number(req.query.event || events[0]?.id);
   const current = events.find(event => event.id === selected);
@@ -227,6 +235,8 @@ app.get('/admin', adminOnly, (req, res) => {
     <p>${events.map(e => `<a href="/admin?event=${e.id}">${esc(e.title)}</a> — ${new Date(e.starts_at).toLocaleString('ru-RU')}</p>`).join('') || 'Событий пока нет.'}
     ${selected ? `${eventSettings(current, assets)}<hr><h2>Заявки</h2><p><strong>Ссылка на регистрацию:</strong> <a href="https://t.me/${encodeURIComponent(process.env.BOT_USERNAME)}?start=event_${selected}">открыть мероприятие в боте</a></p><p><a href="/admin/export/${selected}">Скачать CSV</a> · <a href="/admin/checkin">Режим чек-ина</a></p><table><tr><th>ФИО и телефон</th><th>Telegram</th><th>Статус</th><th>Действие</th></tr>${people.map(p => `<tr><td>${esc(p.name)}<br><small>${esc(p.phone || 'Телефон не указан')}</small></td><td>${p.telegram_id ? esc(p.telegram_name ? '@' + p.telegram_name : 'Username не задан') : 'Не подключён'}</td><td>${esc(p.invitation_status || p.status)}${p.checked_in_at ? ' · пришёл' : ''}</td><td>${p.telegram_id && !['confirmed','pending'].includes(p.invitation_status) ? `<form method="post" action="/admin/invite/${p.id}"><button>Пригласить</button></form>` : ''}</td></tr>`).join('')}</table>` : ''}`));
 });
+const adminBuild = path.resolve('./admin/dist');
+app.use('/admin', adminOnly, express.static(adminBuild));
 app.post('/admin/events', adminOnly, (req, res) => { db.prepare('INSERT INTO events (title,starts_at,description,venue,chat_url) VALUES (?,?,?,?,?)').run(req.body.title, new Date(req.body.starts_at).toISOString(), req.body.description || null, req.body.venue || null, req.body.chat_url || null); res.redirect('/admin'); });
 app.post('/admin/events/:id/settings', adminOnly, (req, res) => {
   db.prepare(`UPDATE events SET registration_text=?, received_text=?, invite_text=?, confirmed_text=?, declined_text=?, reminder_text=? WHERE id=?`)
