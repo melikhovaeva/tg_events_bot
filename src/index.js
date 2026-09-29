@@ -64,6 +64,10 @@ CREATE TABLE IF NOT EXISTS event_message_images (
   original_name TEXT NOT NULL, stored_name TEXT NOT NULL UNIQUE, position INTEGER NOT NULL,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS telegram_consents (
+  telegram_id TEXT PRIMARY KEY, telegram_name TEXT, accepted_at TEXT NOT NULL,
+  policy_url TEXT NOT NULL, agreement_url TEXT NOT NULL
+);
 `);
 for (const [table, column, definition] of [
   ['events', 'description', 'TEXT'], ['events', 'venue', 'TEXT'], ['applicants', 'phone', 'TEXT'],
@@ -78,6 +82,8 @@ for (const [table, column, definition] of [
 
 const nowIso = () => new Date().toISOString();
 const token = () => crypto.randomBytes(18).toString('base64url');
+const policyUrl = 'https://perasperadastra.ru/policy';
+const agreementUrl = 'https://perasperadastra.ru/agreement';
 const esc = (value = '') => String(value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const defaultText = {
   received: 'Спасибо, заявка принята. Мы рассмотрим её и пришлём решение в этот бот.',
@@ -126,8 +132,7 @@ const adminOnly = (req, res, next) => {
 };
 
 const bot = new Bot(process.env.BOT_TOKEN || '');
-bot.command('start', async ctx => {
-  const claim = ctx.match?.trim();
+async function continueStart(ctx, claim) {
   const eventMatch = claim?.match(/^event_(\d+)$/);
   if (eventMatch) {
     const event = db.prepare('SELECT * FROM events WHERE id=?').get(eventMatch[1]);
@@ -151,6 +156,31 @@ bot.command('start', async ctx => {
   db.prepare("UPDATE applicants SET telegram_id=?, telegram_name=?, status=CASE WHEN status='awaiting_review' THEN 'awaiting_review' ELSE status END WHERE id=?")
     .run(String(ctx.from.id), ctx.from.username || null, applicant.id);
   return ctx.reply('Спасибо, заявка получена. Мы рассмотрим её и пришлём решение в этот бот.');
+}
+async function requestConsent(ctx, claim) {
+  const continuation = claim || 'home';
+  const keyboard = new InlineKeyboard()
+    .url('Политика конфиденциальности', policyUrl)
+    .row()
+    .url('Согласие на обработку данных', agreementUrl)
+    .row()
+    .text('Согласен с документами', `consent:${continuation}`);
+  return ctx.reply('Чтобы продолжить, ознакомьтесь с политикой конфиденциальности и согласием на обработку персональных данных.\n\nНажимая «Согласен с документами», вы подтверждаете согласие на обработку данных для регистрации и связи по мероприятию.', { reply_markup: keyboard });
+}
+bot.command('start', async ctx => {
+  const claim = ctx.match?.trim();
+  const consent = db.prepare('SELECT 1 FROM telegram_consents WHERE telegram_id=?').get(String(ctx.from.id));
+  if (!consent) return requestConsent(ctx, claim);
+  return continueStart(ctx, claim);
+});
+bot.callbackQuery(/^consent:(.*)$/, async ctx => {
+  const claim = ctx.match[1] === 'home' ? '' : ctx.match[1];
+  db.prepare(`INSERT INTO telegram_consents (telegram_id,telegram_name,accepted_at,policy_url,agreement_url) VALUES (?,?,?,?,?)
+    ON CONFLICT(telegram_id) DO UPDATE SET telegram_name=excluded.telegram_name, accepted_at=excluded.accepted_at, policy_url=excluded.policy_url, agreement_url=excluded.agreement_url`)
+    .run(String(ctx.from.id), ctx.from.username || null, nowIso(), policyUrl, agreementUrl);
+  await ctx.answerCallbackQuery({ text: 'Согласие сохранено' });
+  await ctx.editMessageText('Спасибо. Согласие на обработку персональных данных сохранено.');
+  return continueStart(ctx, claim);
 });
 
 bot.callbackQuery(/^apply:(\d+)$/, async ctx => {
