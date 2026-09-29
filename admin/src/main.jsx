@@ -4,7 +4,6 @@ import {
   CalendarDays,
   Check,
   Copy,
-  FileText,
   GripVertical,
   ImagePlus,
   LayoutDashboard,
@@ -268,6 +267,19 @@ function Stat({ label, value }) {
   );
 }
 
+function EventTexts({ event, onSaved }) {
+  const [texts, setTexts] = useState({ description: '', invite_text: '', declined_text: '' });
+  const [saved, setSaved] = useState(false);
+  useEffect(() => setTexts({ description: event.description || '', invite_text: event.invite_text || '', declined_text: event.declined_text || '' }), [event]);
+  const save = async e => {
+    e.preventDefault();
+    await request(`/api/admin/events/${event.id}/texts`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(texts) });
+    setSaved(true); onSaved(); window.setTimeout(() => setSaved(false), 1800);
+  };
+  const field = (key, title, hint) => <label className="grid gap-1.5 text-sm font-medium">{title}<Textarea value={texts[key]} onChange={e => setTexts({ ...texts, [key]: e.target.value })} placeholder={hint}/></label>;
+  return <Card className="mt-6"><CardHeader><CardTitle>Тексты события</CardTitle><CardDescription>Используйте <code>{'{event}'}</code> в приглашении — бот подставит название мероприятия.</CardDescription></CardHeader><CardContent><form onSubmit={save} className="grid gap-5">{field('description', 'Карточка мероприятия', 'Что увидит человек перед подачей заявки')}{field('invite_text', 'Приглашение', 'Приглашение на {event}')}{field('declined_text', 'Отказ', 'Спасибо, что сообщили. Будем рады видеть вас на следующих мероприятиях!')}<div><Button>{saved ? <Check size={15}/> : null}{saved ? 'Сохранено' : 'Сохранить тексты'}</Button></div></form></CardContent></Card>;
+}
+
 function App() {
   const [state, setState] = useState({
     events: [],
@@ -415,22 +427,7 @@ function App() {
                   value={count(event.confirmed)}
                 />
               </div>
-              <Card className="mt-6">
-                <CardHeader>
-                  <CardTitle>Тексты события</CardTitle>
-                  <CardDescription>
-                    Приглашение и отказ настраиваются перед отправкой.
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <Button variant="outline" asChild>
-                    <a href={`/admin/legacy?event=${event.id}`}>
-                      <FileText size={15} />
-                      Открыть тексты
-                    </a>
-                  </Button>
-                </CardContent>
-              </Card>
+              <EventTexts event={event} onSaved={() => load(event.id)} />
               <Card className="mt-6">
                 <CardHeader>
                   <CardTitle>Заявки</CardTitle>

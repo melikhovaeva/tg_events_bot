@@ -223,6 +223,7 @@ const upload = multer({
   limits: { fileSize: 20 * 1024 * 1024 },
 });
 app.use(express.urlencoded({ extended: false }));
+app.use(express.json());
 app.get('/', (_, res) => res.redirect('/admin'));
 app.get('/api/admin/state', adminOnly, (req, res) => {
   const events = db.prepare(`SELECT e.*, COUNT(DISTINCT a.id) AS registered, COUNT(DISTINCT i.id) AS invited,
@@ -267,6 +268,11 @@ app.post('/admin/events/:id/settings', adminOnly, (req, res) => {
   db.prepare(`UPDATE events SET registration_text=?, received_text=?, invite_text=?, confirmed_text=?, declined_text=?, reminder_text=? WHERE id=?`)
     .run(req.body.registration_text || null, req.body.received_text || null, req.body.invite_text || null, req.body.confirmed_text || null, req.body.declined_text || null, req.body.reminder_text || null, req.params.id);
   res.redirect(`/admin?event=${req.params.id}`);
+});
+app.post('/api/admin/events/:id/texts', adminOnly, (req, res) => {
+  db.prepare('UPDATE events SET description=?, invite_text=?, declined_text=? WHERE id=?')
+    .run(req.body.description || null, req.body.invite_text || null, req.body.declined_text || null, req.params.id);
+  res.json({ ok: true });
 });
 app.post('/admin/events/:id/assets', adminOnly, upload.single('material'), (req, res) => {
   if (req.file) db.prepare('INSERT INTO event_assets (event_id,original_name,stored_name,delivery_stage) VALUES (?,?,?,?)').run(req.params.id, req.file.originalname, req.file.filename, req.body.delivery_stage);
