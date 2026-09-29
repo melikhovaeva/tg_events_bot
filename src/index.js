@@ -53,6 +53,10 @@ CREATE TABLE IF NOT EXISTS event_assets (
   id INTEGER PRIMARY KEY, event_id INTEGER NOT NULL REFERENCES events(id), original_name TEXT NOT NULL,
   stored_name TEXT NOT NULL UNIQUE, delivery_stage TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS event_images (
+  id INTEGER PRIMARY KEY, event_id INTEGER NOT NULL REFERENCES events(id), original_name TEXT NOT NULL,
+  stored_name TEXT NOT NULL UNIQUE, position INTEGER NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 `);
 for (const [table, column, definition] of [
   ['events', 'description', 'TEXT'], ['events', 'venue', 'TEXT'], ['applicants', 'phone', 'TEXT'],
@@ -98,7 +102,9 @@ bot.command('start', async ctx => {
     const existing = db.prepare('SELECT status FROM applicants WHERE event_id=? AND telegram_id=?').get(event.id, String(ctx.from.id));
     if (existing) return ctx.reply(`Вы уже подали заявку на «${event.title}». Статус: ${existing.status}. Решение придёт в этот бот.`);
     const keyboard = new InlineKeyboard().text('Подать заявку', `apply:${event.id}`);
-    if (event.cover_stored_name) await ctx.replyWithPhoto(new InputFile(path.join(uploadsDir, event.cover_stored_name), event.cover_original_name || 'cover'), { caption: `«${event.title}»` });
+    const images = db.prepare('SELECT * FROM event_images WHERE event_id=? ORDER BY position').all(event.id);
+    if (images.length) await bot.api.sendMediaGroup(ctx.chat.id, images.map((image, index) => ({ type: 'photo', media: new InputFile(path.join(uploadsDir, image.stored_name), image.original_name), caption: index === 0 ? `«${event.title}»` : undefined })));
+    else if (event.cover_stored_name) await ctx.replyWithPhoto(new InputFile(path.join(uploadsDir, event.cover_stored_name), event.cover_original_name || 'cover'), { caption: `«${event.title}»` });
     return ctx.reply(`«${event.title}»\n\n${details}`, { reply_markup: keyboard });
   }
   if (!claim) return ctx.reply('Добро пожаловать! Откройте ссылку на мероприятие, чтобы подать заявку.');
@@ -239,10 +245,17 @@ app.get('/admin/legacy', adminOnly, (req, res) => {
 });
 const adminBuild = path.resolve('./admin/dist');
 app.use('/admin', adminOnly, express.static(adminBuild));
-app.post('/admin/events', adminOnly, upload.single('cover'), (req, res) => {
-  if (req.file && !req.file.mimetype.startsWith('image/')) return res.status(400).send('Обложка должна быть изображением');
-  db.prepare('INSERT INTO events (title,starts_at,description,venue,chat_url,cover_stored_name,cover_original_name) VALUES (?,?,?,?,?,?,?)')
-    .run(req.body.title, new Date(req.body.starts_at).toISOString(), req.body.description || null, req.body.venue || null, req.body.chat_url || null, req.file?.filename || null, req.file?.originalname || null);
+app.post('/admin/events', adminOnly, upload.array('images', 9), (req, res) => {
+  const images = req.files || [];
+  if (images.some(file => !file.mimetype.startsWith('image/'))) return res.status(400).send('Карточка может содержать только изображения');
+  const createEvent = db.transaction(() => {
+    const result = db.prepare('INSERT INTO events (title,starts_at,description,venue,chat_url) VALUES (?,?,?,?,?)')
+      .run(req.body.title, new Date(req.body.starts_at).toISOString(), req.body.description || null, req.body.venue || null, req.body.chat_url || null);
+    const eventId = result.lastInsertRowid;
+    const insertImage = db.prepare('INSERT INTO event_images (event_id,original_name,stored_name,position) VALUES (?,?,?,?)');
+    images.forEach((file, position) => insertImage.run(eventId, file.originalname, file.filename, position));
+  });
+  createEvent();
   res.redirect('/admin');
 });
 app.post('/admin/events/:id/settings', adminOnly, (req, res) => {
