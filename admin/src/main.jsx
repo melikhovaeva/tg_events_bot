@@ -73,7 +73,10 @@ const fmt = (value) =>
 const count = (value) => Number(value || 0);
 async function request(url, options) {
   const r = await fetch(url, options);
-  if (!r.ok) throw new Error("Не удалось сохранить изменения");
+  if (!r.ok) {
+    const data = await r.json().catch(() => ({}));
+    throw new Error(data.error || "Не удалось сохранить изменения");
+  }
   return r;
 }
 
@@ -120,21 +123,16 @@ function SortableImage({ image, onRemove, onReplace }) {
 }
 function ImagePicker({ images, setImages }) {
   const ref = useRef(null);
+  const [fileError, setFileError] = useState("");
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
   );
-  const add = (files) =>
-    setImages((current) => [
-      ...current,
-      ...Array.from(files || [])
-        .filter((f) => f.type.startsWith("image/"))
-        .slice(0, 9 - current.length)
-        .map((file) => ({
-          id: crypto.randomUUID(),
-          file,
-          url: URL.createObjectURL(file),
-        })),
-    ]);
+  const add = (files) => {
+    const selected = Array.from(files || []).filter((file) => file.type.startsWith("image/") || /\.(avif|gif|heic|heif|jpe?g|png|webp)$/i.test(file.name));
+    if (!selected.length) { setFileError("Выберите файл изображения."); return; }
+    setFileError("");
+    setImages((current) => [...current, ...selected.slice(0, 9 - current.length).map((file) => ({ id: crypto.randomUUID(), file, url: URL.createObjectURL(file) }))]);
+  };
   const sort = ({ active, over }) =>
     over &&
     active.id !== over.id &&
@@ -204,6 +202,7 @@ function ImagePicker({ images, setImages }) {
         {images.length}/9 изображений. Перетаскивайте за ручку; при наведении
         доступны замена и удаление.
       </p>
+      {fileError && <p className="text-xs text-destructive">{fileError}</p>}
     </div>
   );
 }
@@ -761,7 +760,7 @@ function App() {
           {page === "posts" && (
             <>
               <div className="flex flex-wrap items-end justify-between gap-3"><div><h1 className="text-3xl font-semibold tracking-tight">Посты</h1><p className="mt-2 text-muted-foreground">Сохранённые черновики можно открыть, поправить и использовать повторно.</p></div><Button onClick={() => { setActiveBroadcast(null); setPage("postEditor"); }}><Plus size={16} />Новый пост</Button></div>
-              <div className="mt-7 grid max-w-3xl gap-3">{state.posts.length ? state.posts.map((post) => <Card key={post.id}><CardContent className="flex items-start justify-between gap-4 p-4 sm:p-5"><div className="min-w-0"><h2 className="font-semibold">{post.title}</h2><p className="mt-1 line-clamp-2 text-sm leading-6 text-muted-foreground">{plainText(post.content) || "Текст пока не добавлен"}</p><p className="mt-3 text-xs text-muted-foreground">{post.audience === "all" ? "Все в боте" : post.audience === "event" ? `Гости: ${post.event_title || "мероприятие не выбрано"}` : "Гости выбраны вручную"} · изменён {fmt(post.updated_at)}</p></div><Button variant="secondary" size="sm" onClick={() => { setActiveBroadcast(post.id); setPage("postEditor"); }}><Pencil size={14} />Редактировать</Button></CardContent></Card>) : <Card><CardContent className="p-6 text-sm text-muted-foreground">Постов пока нет. Создайте первый, чтобы сохранить его для будущих рассылок.</CardContent></Card>}</div>
+              <div className="mt-7 grid max-w-3xl gap-3">{state.posts.length ? state.posts.map((post) => { const images = (state.postImages || []).filter((image) => image.post_id === post.id); const files = (state.postFiles || []).filter((file) => file.post_id === post.id); return <Card key={post.id}><CardContent className="flex items-start justify-between gap-4 p-4 sm:p-5"><div className="min-w-0"><h2 className="font-semibold">{post.title}</h2><p className="mt-1 line-clamp-2 text-sm leading-6 text-muted-foreground">{plainText(post.content) || "Текст пока не добавлен"}</p>{!!images.length && <div className="mt-3 flex -space-x-1.5">{images.slice(0, 5).map((image) => <img key={image.id} src={`/api/admin/post-images/${image.id}`} className="h-8 w-8 rounded-md border-2 border-background object-cover" />)}{images.length > 5 && <span className="flex h-8 w-8 items-center justify-center rounded-md border-2 border-background bg-muted text-xs">+{images.length - 5}</span>}</div>}<p className="mt-3 text-xs text-muted-foreground">{post.audience === "all" ? "Все в боте" : post.audience === "event" ? `Гости: ${post.event_title || "мероприятие не выбрано"}` : "Гости выбраны вручную"}{files.length ? ` · файлов: ${files.length}` : ""} · изменён {fmt(post.updated_at)}</p></div><Button variant="secondary" size="sm" onClick={() => { setActiveBroadcast(post.id); setPage("postEditor"); }}><Pencil size={14} />Редактировать</Button></CardContent></Card>; }) : <Card><CardContent className="p-6 text-sm text-muted-foreground">Постов пока нет. Создайте первый, чтобы сохранить его для будущих рассылок.</CardContent></Card>}</div>
             </>
           )}
           {page === "postEditor" && <PostEditor post={activeBroadcast ? state.posts.find((post) => post.id === activeBroadcast) : null} events={state.events} postImages={state.postImages || []} postFiles={state.postFiles || []} onSaved={async (id) => { setActiveBroadcast(id); await load(active); }} onBack={() => setPage("posts")} />}
