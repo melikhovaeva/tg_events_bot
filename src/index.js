@@ -225,12 +225,17 @@ const upload = multer({
 app.use(express.urlencoded({ extended: false }));
 app.get('/', (_, res) => res.redirect('/admin'));
 app.get('/api/admin/state', adminOnly, (req, res) => {
-  const events = db.prepare('SELECT * FROM events ORDER BY starts_at DESC').all();
+  const events = db.prepare(`SELECT e.*, COUNT(DISTINCT a.id) AS registered, COUNT(DISTINCT i.id) AS invited,
+    SUM(CASE WHEN i.status='confirmed' THEN 1 ELSE 0 END) AS confirmed
+    FROM events e LEFT JOIN applicants a ON a.event_id=e.id LEFT JOIN invitations i ON i.applicant_id=a.id
+    GROUP BY e.id ORDER BY e.starts_at DESC`).all();
   const selected = Number(req.query.event || events[0]?.id);
   const people = selected ? db.prepare(`SELECT a.*, i.id invitation_id, i.status invitation_status, i.expires_at, i.checked_in_at
     FROM applicants a LEFT JOIN invitations i ON i.applicant_id=a.id WHERE a.event_id=? ORDER BY a.created_at DESC`).all(selected) : [];
   const assets = selected ? db.prepare('SELECT * FROM event_assets WHERE event_id=? ORDER BY created_at DESC').all(selected) : [];
-  res.json({ events, selected, people, assets, botUsername: process.env.BOT_USERNAME });
+  const guests = db.prepare(`SELECT a.telegram_id, a.telegram_name, a.name, a.phone, MAX(a.created_at) AS last_seen,
+    COUNT(a.id) AS events_count FROM applicants a GROUP BY COALESCE(a.telegram_id, 'applicant:' || a.id) ORDER BY last_seen DESC`).all();
+  res.json({ events, selected, people, assets, guests, botUsername: process.env.BOT_USERNAME });
 });
 app.get('/admin/legacy', adminOnly, (req, res) => {
   const events = db.prepare('SELECT * FROM events ORDER BY starts_at DESC').all();
