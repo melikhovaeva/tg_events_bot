@@ -28,7 +28,7 @@ fs.mkdirSync(uploadsDir, { recursive: true });
 db.exec(`
 CREATE TABLE IF NOT EXISTS events (
   id INTEGER PRIMARY KEY, title TEXT NOT NULL, starts_at TEXT NOT NULL,
-  description TEXT, venue TEXT, chat_url TEXT, registration_text TEXT, received_text TEXT,
+  description TEXT, venue TEXT, chat_url TEXT, cover_stored_name TEXT, cover_original_name TEXT, registration_text TEXT, received_text TEXT,
   invite_text TEXT, confirmed_text TEXT, declined_text TEXT, reminder_text TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -58,6 +58,7 @@ for (const [table, column, definition] of [
   ['events', 'description', 'TEXT'], ['events', 'venue', 'TEXT'], ['applicants', 'phone', 'TEXT'],
   ['events', 'registration_text', 'TEXT'], ['events', 'received_text', 'TEXT'], ['events', 'invite_text', 'TEXT'],
   ['events', 'confirmed_text', 'TEXT'], ['events', 'declined_text', 'TEXT'], ['events', 'reminder_text', 'TEXT'],
+  ['events', 'cover_stored_name', 'TEXT'], ['events', 'cover_original_name', 'TEXT'],
 ]) {
   try { db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`); } catch { /* already exists */ }
 }
@@ -97,6 +98,7 @@ bot.command('start', async ctx => {
     const existing = db.prepare('SELECT status FROM applicants WHERE event_id=? AND telegram_id=?').get(event.id, String(ctx.from.id));
     if (existing) return ctx.reply(`Вы уже подали заявку на «${event.title}». Статус: ${existing.status}. Решение придёт в этот бот.`);
     const keyboard = new InlineKeyboard().text('Подать заявку', `apply:${event.id}`);
+    if (event.cover_stored_name) await ctx.replyWithPhoto(new InputFile(path.join(uploadsDir, event.cover_stored_name), event.cover_original_name || 'cover'), { caption: `«${event.title}»` });
     return ctx.reply(`«${event.title}»\n\n${details}`, { reply_markup: keyboard });
   }
   if (!claim) return ctx.reply('Добро пожаловать! Откройте ссылку на мероприятие, чтобы подать заявку.');
@@ -237,7 +239,12 @@ app.get('/admin/legacy', adminOnly, (req, res) => {
 });
 const adminBuild = path.resolve('./admin/dist');
 app.use('/admin', adminOnly, express.static(adminBuild));
-app.post('/admin/events', adminOnly, (req, res) => { db.prepare('INSERT INTO events (title,starts_at,description,venue,chat_url) VALUES (?,?,?,?,?)').run(req.body.title, new Date(req.body.starts_at).toISOString(), req.body.description || null, req.body.venue || null, req.body.chat_url || null); res.redirect('/admin'); });
+app.post('/admin/events', adminOnly, upload.single('cover'), (req, res) => {
+  if (req.file && !req.file.mimetype.startsWith('image/')) return res.status(400).send('Обложка должна быть изображением');
+  db.prepare('INSERT INTO events (title,starts_at,description,venue,chat_url,cover_stored_name,cover_original_name) VALUES (?,?,?,?,?,?,?)')
+    .run(req.body.title, new Date(req.body.starts_at).toISOString(), req.body.description || null, req.body.venue || null, req.body.chat_url || null, req.file?.filename || null, req.file?.originalname || null);
+  res.redirect('/admin');
+});
 app.post('/admin/events/:id/settings', adminOnly, (req, res) => {
   db.prepare(`UPDATE events SET registration_text=?, received_text=?, invite_text=?, confirmed_text=?, declined_text=?, reminder_text=? WHERE id=?`)
     .run(req.body.registration_text || null, req.body.received_text || null, req.body.invite_text || null, req.body.confirmed_text || null, req.body.declined_text || null, req.body.reminder_text || null, req.params.id);
