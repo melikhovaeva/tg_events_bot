@@ -11,10 +11,13 @@ import {
   Italic,
   LayoutDashboard,
   MessageSquare,
+  Lock,
+  LockOpen,
   Link,
   Pencil,
   Plus,
   Replace,
+  QrCode,
   Send,
   Strikethrough,
   Trash2,
@@ -361,6 +364,30 @@ function TextPostEditor({ event, post, messageImages, onSaved, onBack }) {
   </>;
 }
 
+function Checkin({ event, onBack, onCheckedIn }) {
+  const input = useRef(null);
+  const [code, setCode] = useState("");
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState("");
+  const submit = async (e) => {
+    e.preventDefault();
+    setError(""); setResult(null);
+    try {
+      const response = await fetch("/api/admin/checkin", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code, event_id: event.id }) });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Не удалось отметить гостя");
+      setResult(data); setCode(""); await onCheckedIn();
+    } catch (e) { setError(e.message); }
+    finally { window.setTimeout(() => input.current?.focus(), 0); }
+  };
+  useEffect(() => { input.current?.focus(); }, []);
+  return <>
+    <button onClick={onBack} className="mb-5 text-sm text-muted-foreground hover:text-foreground">← {event.title}</button>
+    <div><h1 className="text-3xl font-semibold tracking-tight">Чек-ин</h1><p className="mt-2 text-muted-foreground">Сканируйте QR камерой или подключённым сканером. Код автоматически подставится в поле.</p></div>
+    <Card className="mt-7 max-w-xl"><CardContent className="p-5 sm:p-6"><form onSubmit={submit} className="grid gap-4"><label className="grid gap-2 text-sm font-medium">Код гостя<Input ref={input} value={code} onChange={(e) => setCode(e.target.value)} placeholder="Сканируйте QR или вставьте код" autoComplete="off" /></label><Button disabled={!code.trim()}><QrCode size={16} />Отметить приход</Button></form>{result && <div className="mt-5 rounded-md border border-green-200 bg-green-50 p-4 text-sm text-green-800"><b>{result.guest}</b> отмечен на мероприятии.</div>}{error && <div className="mt-5 rounded-md border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">{error}</div>}</CardContent></Card>
+  </>;
+}
+
 function App() {
   const [state, setState] = useState({
     events: [],
@@ -397,6 +424,10 @@ function App() {
   const invite = async (id) => {
     await request(`/admin/invite/${id}`, { method: "POST" });
     await load(active);
+  };
+  const setRegistration = async (open) => {
+    await request(`/api/admin/events/${event.id}/registration`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ open }) });
+    await load(event.id);
   };
   const copy = async () => {
     await navigator.clipboard.writeText(
@@ -494,6 +525,10 @@ function App() {
                   </p>
                 </div>
                 <div className="flex gap-2">
+                  <Button variant="outline" onClick={() => setPage("checkin")}>
+                    <QrCode size={15} />
+                    Чек-ин
+                  </Button>
                   <Button variant="outline" onClick={() => setPage("texts")}>
                     <FileText size={15} />
                     Тексты
@@ -502,9 +537,13 @@ function App() {
                     {copied ? <Check size={15} /> : <Copy size={15} />}
                     {copied ? "Скопировано" : "Скопировать ссылку"}
                   </Button>
+                  <Button variant="outline" onClick={() => setRegistration(!event.registration_open)}>
+                    {event.registration_open ? <Lock size={15} /> : <LockOpen size={15} />}
+                    {event.registration_open ? "Закрыть регистрацию" : "Открыть регистрацию"}
+                  </Button>
                 </div>
               </div>
-              <div className="mt-7 grid gap-4 md:grid-cols-3">
+              <div className="mt-7 grid gap-4 md:grid-cols-4">
                 <Stat
                   label="зарегистрировалось"
                   value={count(event.registered)}
@@ -514,7 +553,9 @@ function App() {
                   label="подтвердило участие"
                   value={count(event.confirmed)}
                 />
+                <Stat label="пришли" value={count(event.checked_in)} />
               </div>
+              {!event.registration_open && <p className="mt-4 rounded-md border bg-muted/40 px-3 py-2 text-sm">Регистрация закрыта: новые гости не смогут подать заявку по ссылке.</p>}
               <Card className="mt-6">
                 <CardHeader>
                   <CardTitle>Заявки</CardTitle>
@@ -543,7 +584,7 @@ function App() {
                             {p.telegram_name ? `@${p.telegram_name}` : "—"}
                           </td>
                           <td className="py-3">
-                            {statusNames[p.invitation_status || p.status]}
+                            {p.checked_in_at ? "Пришёл" : statusNames[p.invitation_status || p.status]}
                           </td>
                           <td className="py-3 text-right">
                             {p.telegram_id &&
@@ -590,6 +631,7 @@ function App() {
               onBack={() => setPage("texts")}
             />
           )}
+          {page === "checkin" && event && <Checkin event={event} onBack={() => setPage("detail")} onCheckedIn={() => load(event.id)} />}
           {page === "guests" && (
             <>
               <h1 className="text-3xl font-semibold tracking-tight">Гости</h1>

@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS events (
   id INTEGER PRIMARY KEY, title TEXT NOT NULL, starts_at TEXT NOT NULL,
   description TEXT, venue TEXT, chat_url TEXT, cover_stored_name TEXT, cover_original_name TEXT, registration_text TEXT, received_text TEXT,
   invite_text TEXT, expired_text TEXT, confirmed_text TEXT, declined_text TEXT, reminder_text TEXT,
+  registration_open INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS applicants (
@@ -70,6 +71,7 @@ for (const [table, column, definition] of [
   ['events', 'confirmed_text', 'TEXT'], ['events', 'declined_text', 'TEXT'], ['events', 'reminder_text', 'TEXT'],
   ['events', 'expired_text', 'TEXT'], ['invitations', 'final_confirmed_at', 'TEXT'],
   ['events', 'cover_stored_name', 'TEXT'], ['events', 'cover_original_name', 'TEXT'],
+  ['events', 'registration_open', 'INTEGER NOT NULL DEFAULT 1'],
 ]) {
   try { db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`); } catch { /* already exists */ }
 }
@@ -134,6 +136,7 @@ bot.command('start', async ctx => {
     const details = [event.registration_text || event.description, event.venue && `📍 ${event.venue}`, `🗓 ${date}`].filter(Boolean).join('\n\n');
     const existing = db.prepare('SELECT status FROM applicants WHERE event_id=? AND telegram_id=?').get(event.id, String(ctx.from.id));
     if (existing) return ctx.reply(`Вы уже подали заявку на «${event.title}». Статус: ${existing.status}. Решение придёт в этот бот.`);
+    if (!event.registration_open) return ctx.reply(`Регистрация на «${event.title}» закрыта. Следите за следующими мероприятиями.`);
     const keyboard = new InlineKeyboard().text('Подать заявку', `apply:${event.id}`);
     const images = db.prepare('SELECT * FROM event_images WHERE event_id=? ORDER BY position').all(event.id);
     if (images.length) await bot.api.sendMediaGroup(ctx.chat.id, images.map((image, index) => ({ type: 'photo', media: new InputFile(path.join(uploadsDir, image.stored_name), image.original_name), caption: index === 0 ? `«${event.title}»` : undefined })));
@@ -153,6 +156,7 @@ bot.command('start', async ctx => {
 bot.callbackQuery(/^apply:(\d+)$/, async ctx => {
   const event = db.prepare('SELECT * FROM events WHERE id=?').get(ctx.match[1]);
   if (!event) return ctx.answerCallbackQuery({ text: 'Мероприятие не найдено.', show_alert: true });
+  if (!event.registration_open) return ctx.answerCallbackQuery({ text: 'Регистрация на это мероприятие закрыта.', show_alert: true });
   const telegramId = String(ctx.from.id);
   if (db.prepare('SELECT 1 FROM applicants WHERE event_id=? AND telegram_id=?').get(event.id, telegramId)) {
     return ctx.answerCallbackQuery({ text: 'Заявка уже подана.', show_alert: true });
@@ -280,7 +284,8 @@ app.use(express.json());
 app.get('/', (_, res) => res.redirect('/admin'));
 app.get('/api/admin/state', adminOnly, (req, res) => {
   const events = db.prepare(`SELECT e.*, COUNT(DISTINCT a.id) AS registered, COUNT(DISTINCT i.id) AS invited,
-    SUM(CASE WHEN i.status='confirmed' THEN 1 ELSE 0 END) AS confirmed
+    SUM(CASE WHEN i.status='confirmed' THEN 1 ELSE 0 END) AS confirmed,
+    SUM(CASE WHEN i.checked_in_at IS NOT NULL THEN 1 ELSE 0 END) AS checked_in
     FROM events e LEFT JOIN applicants a ON a.event_id=e.id LEFT JOIN invitations i ON i.applicant_id=a.id
     GROUP BY e.id ORDER BY e.starts_at DESC`).all();
   const selected = Number(req.query.event || events[0]?.id);
@@ -328,6 +333,10 @@ app.post('/api/admin/events/:id/texts', adminOnly, (req, res) => {
     .run(telegramHtml(req.body.description || '') || null, telegramHtml(req.body.invite_text || '') || null, telegramHtml(req.body.expired_text || '') || null, telegramHtml(req.body.confirmed_text || '') || null, telegramHtml(req.body.reminder_text || '') || null, telegramHtml(req.body.declined_text || '') || null, req.params.id);
   res.json({ ok: true });
 });
+app.post('/api/admin/events/:id/registration', adminOnly, (req, res) => {
+  db.prepare('UPDATE events SET registration_open=? WHERE id=?').run(req.body.open ? 1 : 0, req.params.id);
+  res.json({ ok: true });
+});
 app.post('/api/admin/events/:id/message-images/:key', adminOnly, upload.array('images', 9), (req, res) => {
   const messageKeys = new Set(['registration', 'invite', 'expired', 'confirmed', 'declined', 'reminder']);
   if (!messageKeys.has(req.params.key)) return res.status(400).json({ error: 'Неизвестный тип сообщения' });
@@ -358,6 +367,20 @@ app.post('/api/admin/events/:id/message-images/:key/order', adminOnly, (req, res
   const update = db.prepare('UPDATE event_message_images SET position=? WHERE id=?');
   db.transaction(() => ids.forEach((id, position) => update.run(position, id)))();
   res.json({ ok: true });
+});
+app.post('/api/admin/checkin', adminOnly, (req, res) => {
+  const raw = String(req.body.code || '').trim();
+  const eventId = Number(req.body.event_id);
+  if (!raw) return res.status(400).json({ error: 'Введите код из QR' });
+  const byToken = db.prepare(`SELECT i.*, a.name, a.event_id, e.title FROM invitations i JOIN applicants a ON a.id=i.applicant_id JOIN events e ON e.id=a.event_id
+    WHERE i.checkin_token=? ${eventId ? 'AND a.event_id=?' : ''}`).get(...(eventId ? [raw, eventId] : [raw]));
+  const row = byToken || db.prepare(`SELECT i.*, a.name, a.event_id, e.title FROM invitations i JOIN applicants a ON a.id=i.applicant_id JOIN events e ON e.id=a.event_id
+    WHERE upper(substr(i.checkin_token,1,8))=? ${eventId ? 'AND a.event_id=?' : ''}`).get(...(eventId ? [raw.toUpperCase(), eventId] : [raw.toUpperCase()]));
+  if (!row) return res.status(404).json({ error: 'Код не найден для этого мероприятия' });
+  if (row.status !== 'confirmed') return res.status(409).json({ error: 'Участие этого гостя не подтверждено' });
+  if (row.checked_in_at) return res.status(409).json({ error: 'Гость уже отмечен', guest: row.name, already: true });
+  db.prepare('UPDATE invitations SET checked_in_at=? WHERE id=?').run(nowIso(), row.id);
+  res.json({ ok: true, guest: row.name, event: row.title });
 });
 app.post('/admin/events/:id/assets', adminOnly, upload.single('material'), (req, res) => {
   if (req.file) db.prepare('INSERT INTO event_assets (event_id,original_name,stored_name,delivery_stage) VALUES (?,?,?,?)').run(req.params.id, req.file.originalname, req.file.filename, req.body.delivery_stage);
