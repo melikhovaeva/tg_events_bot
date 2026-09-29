@@ -68,6 +68,11 @@ CREATE TABLE IF NOT EXISTS telegram_consents (
   telegram_id TEXT PRIMARY KEY, telegram_name TEXT, accepted_at TEXT NOT NULL,
   policy_url TEXT NOT NULL, agreement_url TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS posts (
+  id INTEGER PRIMARY KEY, title TEXT NOT NULL, content TEXT NOT NULL DEFAULT '',
+  audience TEXT NOT NULL DEFAULT 'all', event_id INTEGER REFERENCES events(id),
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 `);
 for (const [table, column, definition] of [
   ['events', 'description', 'TEXT'], ['events', 'venue', 'TEXT'], ['applicants', 'phone', 'TEXT'],
@@ -325,7 +330,8 @@ app.get('/api/admin/state', adminOnly, (req, res) => {
   const guests = db.prepare(`SELECT a.telegram_id, a.telegram_name, a.name, a.phone, MAX(a.created_at) AS last_seen,
     COUNT(a.id) AS events_count FROM applicants a GROUP BY COALESCE(a.telegram_id, 'applicant:' || a.id) ORDER BY last_seen DESC`).all();
   const messageImages = selected ? db.prepare('SELECT id,message_key,original_name,position FROM event_message_images WHERE event_id=? ORDER BY position').all(selected) : [];
-  res.json({ events, selected, people, assets, guests, messageImages, botUsername: process.env.BOT_USERNAME });
+  const posts = db.prepare(`SELECT p.*, e.title AS event_title FROM posts p LEFT JOIN events e ON e.id=p.event_id ORDER BY p.updated_at DESC`).all();
+  res.json({ events, selected, people, assets, guests, messageImages, posts, botUsername: process.env.BOT_USERNAME });
 });
 app.get('/admin/legacy', adminOnly, (req, res) => {
   const events = db.prepare('SELECT * FROM events ORDER BY starts_at DESC').all();
@@ -366,6 +372,25 @@ app.post('/api/admin/events/:id/texts', adminOnly, (req, res) => {
 app.post('/api/admin/events/:id/registration', adminOnly, (req, res) => {
   db.prepare('UPDATE events SET registration_open=? WHERE id=?').run(req.body.open ? 1 : 0, req.params.id);
   res.json({ ok: true });
+});
+app.post('/api/admin/posts', adminOnly, (req, res) => {
+  const title = String(req.body.title || '').trim();
+  if (!title) return res.status(400).json({ error: 'Добавьте название поста' });
+  const audience = ['all', 'event', 'manual'].includes(req.body.audience) ? req.body.audience : 'all';
+  const eventId = audience === 'event' && Number(req.body.event_id) ? Number(req.body.event_id) : null;
+  const result = db.prepare('INSERT INTO posts (title,content,audience,event_id,updated_at) VALUES (?,?,?,?,?)')
+    .run(title, telegramHtml(req.body.content || ''), audience, eventId, nowIso());
+  res.json({ ok: true, id: Number(result.lastInsertRowid) });
+});
+app.post('/api/admin/posts/:id', adminOnly, (req, res) => {
+  const title = String(req.body.title || '').trim();
+  if (!title) return res.status(400).json({ error: 'Добавьте название поста' });
+  const audience = ['all', 'event', 'manual'].includes(req.body.audience) ? req.body.audience : 'all';
+  const eventId = audience === 'event' && Number(req.body.event_id) ? Number(req.body.event_id) : null;
+  const result = db.prepare('UPDATE posts SET title=?, content=?, audience=?, event_id=?, updated_at=? WHERE id=?')
+    .run(title, telegramHtml(req.body.content || ''), audience, eventId, nowIso(), req.params.id);
+  if (!result.changes) return res.sendStatus(404);
+  res.json({ ok: true, id: Number(req.params.id) });
 });
 app.post('/api/admin/events/:id/message-images/:key', adminOnly, upload.array('images', 9), (req, res) => {
   const messageKeys = new Set(['registration', 'invite', 'expired', 'confirmed', 'declined', 'reminder']);

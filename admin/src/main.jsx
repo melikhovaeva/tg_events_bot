@@ -400,20 +400,47 @@ function Checkin({ event, onBack, onCheckedIn }) {
   </>;
 }
 
+function PostEditor({ post, events, onSaved, onBack }) {
+  const [title, setTitle] = useState(post?.title || "");
+  const [content, setContent] = useState(post?.content || "");
+  const [audience, setAudience] = useState(post?.audience || "all");
+  const [eventId, setEventId] = useState(post?.event_id ? String(post.event_id) : "");
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState("");
+  const save = async () => {
+    setSaving(true); setSaved(false); setError("");
+    try {
+      const response = await request(post ? `/api/admin/posts/${post.id}` : "/api/admin/posts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title, content, audience, event_id: eventId }) });
+      const data = await response.json();
+      await onSaved(data.id); setSaved(true);
+    } catch (e) { setError(e.message); }
+    finally { setSaving(false); }
+  };
+  return <>
+    <button onClick={onBack} className="mb-5 text-sm text-muted-foreground hover:text-foreground">← Все посты</button>
+    <div className="flex flex-wrap items-end justify-between gap-3"><div><h1 className="text-3xl font-semibold tracking-tight">{post ? "Редактировать пост" : "Новый пост"}</h1><p className="mt-2 text-muted-foreground">Сохраните пост — позже его можно будет отредактировать и разослать повторно.</p></div><span className="text-xs text-muted-foreground">Пост пока остаётся черновиком.</span></div>
+    <Card className="mt-7 max-w-3xl"><CardContent className="grid gap-6 p-5 sm:p-6"><label className="grid gap-2 text-sm font-medium">Название для команды<Input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Например, напоминание после события" /></label><label className="grid gap-2 text-sm font-medium">Текст поста<RichTextEditor value={content} onChange={setContent} placeholder="Напишите сообщение для гостей" /></label><div className="grid gap-2 sm:grid-cols-2"><label className="grid gap-1.5 text-sm font-medium">Аудитория<select value={audience} onChange={(event) => setAudience(event.target.value)} className="h-9 rounded-md border bg-background px-3 text-sm"><option value="all">Все, кто запустил бота</option><option value="event">Гости конкретного мероприятия</option><option value="manual">Выбрать гостей вручную</option></select></label>{audience === "event" && <label className="grid gap-1.5 text-sm font-medium">Мероприятие<select value={eventId} onChange={(event) => setEventId(event.target.value)} className="h-9 rounded-md border bg-background px-3 text-sm"><option value="">Выберите мероприятие</option>{events.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label>}</div>{error && <p className="text-sm text-destructive">{error}</p>}<div className="flex justify-end gap-2"><Button variant="outline" onClick={onBack}>Назад</Button><Button onClick={save} disabled={saving || !title.trim() || (audience === "event" && !eventId)}>{saving ? "Сохраняем…" : saved ? "Сохранено" : "Сохранить черновик"}</Button></div></CardContent></Card>
+  </>;
+}
+
 function App() {
   const initialRoute = new URLSearchParams(window.location.search);
   const initialPage = initialRoute.get("page") || "events";
   const initialEvent = Number(initialRoute.get("event")) || null;
-  const initialPost = initialRoute.get("post") || null;
+  const initialPost = initialRoute.get("text") || (initialPage === "textEditor" ? initialRoute.get("post") : null);
+  const initialBroadcast = Number(initialRoute.get("postId")) || null;
   const [state, setState] = useState({
     events: [],
     people: [],
     guests: [],
     assets: [],
+    posts: [],
   });
   const [page, setPage] = useState(initialPage);
   const [active, setActive] = useState(initialEvent);
   const [activePost, setActivePost] = useState(initialPost);
+  const [activeBroadcast, setActiveBroadcast] = useState(initialBroadcast);
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState("");
@@ -435,7 +462,8 @@ function App() {
     const needsEvent = ["detail", "texts", "textEditor", "checkin"].includes(page);
     if (page !== "events") params.set("page", page);
     if (needsEvent && active) params.set("event", active);
-    if (page === "textEditor" && activePost) params.set("post", activePost);
+    if (page === "textEditor" && activePost) params.set("text", activePost);
+    if (page === "postEditor" && activeBroadcast) params.set("postId", activeBroadcast);
     const query = params.toString();
     window.history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}`);
   }, [page, active, activePost]);
@@ -706,45 +734,11 @@ function App() {
           )}
           {page === "posts" && (
             <>
-              <h1 className="text-3xl font-semibold tracking-tight">Посты</h1>
-              <p className="mt-2 text-muted-foreground">
-                Подготовьте сообщение и выберите, кому оно предназначено.
-              </p>
-              <Card className="mt-7 max-w-2xl">
-                <CardHeader>
-                  <CardTitle>Новый пост</CardTitle>
-                  <CardDescription>
-                    Перед массовой отправкой система покажет число получателей.
-                  </CardDescription>
-                </CardHeader>
-                <CardContent className="grid gap-4">
-                  <label className="grid gap-1.5 text-sm font-medium">
-                    Аудитория
-                    <select className="h-9 rounded-md border bg-background px-3 text-sm">
-                      <option>Все, кто запустил бота</option>
-                      {state.events.map((e) => (
-                        <option key={e.id}>
-                          Зарегистрированные: {e.title}
-                        </option>
-                      ))}
-                      <option>Выбрать гостей вручную</option>
-                    </select>
-                  </label>
-                  <label className="grid gap-1.5 text-sm font-medium">
-                    Текст поста
-                    <Textarea placeholder="Напишите сообщение для гостей" />
-                  </label>
-                  <Button disabled>
-                    <Send size={15} />
-                    Подготовить отправку
-                  </Button>
-                  <p className="text-xs text-muted-foreground">
-                    Массовая отправка будет отдельным подтверждаемым шагом.
-                  </p>
-                </CardContent>
-              </Card>
+              <div className="flex flex-wrap items-end justify-between gap-3"><div><h1 className="text-3xl font-semibold tracking-tight">Посты</h1><p className="mt-2 text-muted-foreground">Сохранённые черновики можно открыть, поправить и использовать повторно.</p></div><Button onClick={() => { setActiveBroadcast(null); setPage("postEditor"); }}><Plus size={16} />Новый пост</Button></div>
+              <div className="mt-7 grid max-w-3xl gap-3">{state.posts.length ? state.posts.map((post) => <Card key={post.id}><CardContent className="flex items-start justify-between gap-4 p-4 sm:p-5"><div className="min-w-0"><h2 className="font-semibold">{post.title}</h2><p className="mt-1 line-clamp-2 text-sm leading-6 text-muted-foreground">{plainText(post.content) || "Текст пока не добавлен"}</p><p className="mt-3 text-xs text-muted-foreground">{post.audience === "all" ? "Все в боте" : post.audience === "event" ? `Гости: ${post.event_title || "мероприятие не выбрано"}` : "Гости выбраны вручную"} · изменён {fmt(post.updated_at)}</p></div><Button variant="secondary" size="sm" onClick={() => { setActiveBroadcast(post.id); setPage("postEditor"); }}><Pencil size={14} />Редактировать</Button></CardContent></Card>) : <Card><CardContent className="p-6 text-sm text-muted-foreground">Постов пока нет. Создайте первый, чтобы сохранить его для будущих рассылок.</CardContent></Card>}</div>
             </>
           )}
+          {page === "postEditor" && <PostEditor post={activeBroadcast ? state.posts.find((post) => post.id === activeBroadcast) : null} events={state.events} onSaved={async (id) => { setActiveBroadcast(id); await load(active); }} onBack={() => setPage("posts")} />}
       </main>
       <CreateDialog open={open} setOpen={setOpen} create={create} />
     </div>
