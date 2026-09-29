@@ -85,7 +85,28 @@ const defaultText = {
   expired: 'К сожалению, мы не дождались вашего ответа и освобождаем место. Будем рады видеть вас на следующих мероприятиях!',
   reminder: 'Напоминаем: «{event}» уже завтра. Ждём вас!',
 };
-const eventText = (event, key) => (event[`${key}_text`] || defaultText[key]).replaceAll('{event}', event.title);
+const telegramHtml = (value = '') => String(value)
+  .replace(/\r\n|\r|\n/g, '<br>')
+  .split(/(<[^>]*>)/g)
+  .map(part => {
+    if (part === '<br>' || part === '<br/>' || part === '<br />') return '<br>';
+    if (/^<\/?(div|p)>$/i.test(part)) return '<br>';
+    if (/^<\/(b|strong)>$/i.test(part)) return '</b>';
+    if (/^<\/(i|em)>$/i.test(part)) return '</i>';
+    if (/^<\/u>$/i.test(part)) return '</u>';
+    if (/^<\/(s|strike|del)>$/i.test(part)) return '</s>';
+    if (/^<\/(a)>$/i.test(part)) return '</a>';
+    if (/^<(b|strong)>$/i.test(part)) return '<b>';
+    if (/^<(i|em)>$/i.test(part)) return '<i>';
+    if (/^<u>$/i.test(part)) return '<u>';
+    if (/^<(s|strike|del)>$/i.test(part)) return '<s>';
+    const link = part.match(/^<a\s+href=["'](https?:\/\/[^"'<>\s]+|tg:\/\/[^"'<>\s]+)["']\s*>$/i);
+    if (link) return `<a href="${esc(link[1])}">`;
+    return esc(part);
+  }).join('')
+  .replace(/(?:<br>){3,}/g, '<br><br>');
+const eventText = (event, key) => telegramHtml((event[`${key}_text`] || defaultText[key]).replaceAll('{event}', event.title));
+const messageOptions = options => ({ parse_mode: 'HTML', ...options });
 async function sendAssets(telegramId, eventId, stage) {
   const assets = db.prepare('SELECT * FROM event_assets WHERE event_id=? AND delivery_stage=?').all(eventId, stage);
   for (const asset of assets) await bot.api.sendDocument(telegramId, new InputFile(path.join(uploadsDir, asset.stored_name), asset.original_name)).catch(console.error);
@@ -118,7 +139,7 @@ bot.command('start', async ctx => {
     if (images.length) await bot.api.sendMediaGroup(ctx.chat.id, images.map((image, index) => ({ type: 'photo', media: new InputFile(path.join(uploadsDir, image.stored_name), image.original_name), caption: index === 0 ? `«${event.title}»` : undefined })));
     else if (event.cover_stored_name) await ctx.replyWithPhoto(new InputFile(path.join(uploadsDir, event.cover_stored_name), event.cover_original_name || 'cover'), { caption: `«${event.title}»` });
     await sendMessageImages(ctx.chat.id, event.id, 'registration');
-    return ctx.reply(`«${event.title}»\n\n${details}`, { reply_markup: keyboard });
+    return ctx.reply(`«${esc(event.title)}»<br><br>${telegramHtml(details)}`, messageOptions({ reply_markup: keyboard }));
   }
   if (!claim) return ctx.reply('Добро пожаловать! Откройте ссылку на мероприятие, чтобы подать заявку.');
   const applicant = db.prepare('SELECT * FROM applicants WHERE claim_token = ?').get(claim);
@@ -151,7 +172,7 @@ bot.on('message:contact', async ctx => {
     .run(draft.event_id, name, ctx.message.contact.phone_number, token(), telegramId, ctx.from.username || null, 'awaiting_review');
   db.prepare('DELETE FROM application_drafts WHERE telegram_id=? AND event_id=?').run(telegramId, draft.event_id);
   const event = db.prepare('SELECT * FROM events WHERE id=?').get(draft.event_id);
-  await ctx.reply(eventText(event, 'received'), { reply_markup: { remove_keyboard: true } });
+  await ctx.reply(eventText(event, 'received'), messageOptions({ reply_markup: { remove_keyboard: true } }));
 });
 
 bot.on('message:text', async ctx => {
@@ -177,13 +198,13 @@ bot.callbackQuery(/^answer:(yes|no):(\d+)$/, async ctx => {
   if (answer === 'no') {
     db.prepare("UPDATE invitations SET status='declined', responded_at=? WHERE id=?").run(nowIso(), id);
     db.prepare("UPDATE applicants SET status='declined' WHERE id=?").run(row.applicant_id);
-    await ctx.editMessageText(eventText(row, 'declined')); await sendMessageImages(row.telegram_id, row.event_id, 'declined');
+    await ctx.editMessageText(eventText(row, 'declined'), messageOptions()); await sendMessageImages(row.telegram_id, row.event_id, 'declined');
   } else {
     const checkinToken = token();
     db.prepare("UPDATE invitations SET status='confirmed', responded_at=?, checkin_token=? WHERE id=?").run(nowIso(), checkinToken, id);
     db.prepare("UPDATE applicants SET status='confirmed' WHERE id=?").run(row.applicant_id);
     const qr = await QRCode.toBuffer(checkinToken, { width: 700, margin: 2 });
-    await ctx.editMessageText(eventText(row, 'confirmed'), { reply_markup: new InlineKeyboard().text('Не смогу прийти', `cancel:${id}`) }); await sendMessageImages(row.telegram_id, row.event_id, 'confirmed');
+    await ctx.editMessageText(eventText(row, 'confirmed'), messageOptions({ reply_markup: new InlineKeyboard().text('Не смогу прийти', `cancel:${id}`) })); await sendMessageImages(row.telegram_id, row.event_id, 'confirmed');
     if (row.chat_url) await ctx.reply(`Пока можете присоединиться к чату мероприятия: ${row.chat_url}`);
     await sendAssets(row.telegram_id, row.event_id, 'confirmed');
     await ctx.replyWithPhoto(new Uint8Array(qr), { caption: `Ваш QR для входа на «${row.title}». Сохраните его.\nРезервный код: ${checkinToken.slice(0, 8).toUpperCase()}` });
@@ -196,14 +217,14 @@ bot.callbackQuery(/^cancel:(\d+)$/, async ctx => {
   if (!row || row.telegram_id !== String(ctx.from.id) || row.status !== 'confirmed') return ctx.answerCallbackQuery({ text: 'Это участие уже нельзя отменить.', show_alert: true });
   db.prepare("UPDATE invitations SET status='declined', responded_at=? WHERE id=?").run(nowIso(), row.id);
   db.prepare("UPDATE applicants SET status='declined' WHERE id=?").run(row.applicant_id);
-  await ctx.editMessageText(eventText(row, 'declined')); await sendMessageImages(row.telegram_id, row.event_id, 'declined');
+  await ctx.editMessageText(eventText(row, 'declined'), messageOptions()); await sendMessageImages(row.telegram_id, row.event_id, 'declined');
   return ctx.answerCallbackQuery();
 });
 bot.callbackQuery(/^final:(yes|no):(\d+)$/, async ctx => {
   const [, answer, id] = ctx.match;
   const row = db.prepare('SELECT i.*, a.telegram_id, a.id applicant_id, e.id event_id, e.declined_text, e.title FROM invitations i JOIN applicants a ON a.id=i.applicant_id JOIN events e ON e.id=a.event_id WHERE i.id=?').get(id);
   if (!row || row.telegram_id !== String(ctx.from.id) || row.status !== 'confirmed') return ctx.answerCallbackQuery({ text: 'Приглашение не найдено.', show_alert: true });
-  if (answer === 'no') { db.prepare("UPDATE invitations SET status='declined', responded_at=? WHERE id=?").run(nowIso(), id); db.prepare("UPDATE applicants SET status='declined' WHERE id=?").run(row.applicant_id); await ctx.editMessageText(eventText(row, 'declined')); await sendMessageImages(row.telegram_id, row.event_id, 'declined'); return ctx.answerCallbackQuery(); }
+  if (answer === 'no') { db.prepare("UPDATE invitations SET status='declined', responded_at=? WHERE id=?").run(nowIso(), id); db.prepare("UPDATE applicants SET status='declined' WHERE id=?").run(row.applicant_id); await ctx.editMessageText(eventText(row, 'declined'), messageOptions()); await sendMessageImages(row.telegram_id, row.event_id, 'declined'); return ctx.answerCallbackQuery(); }
   db.prepare('UPDATE invitations SET final_confirmed_at=? WHERE id=?').run(nowIso(), id);
   await ctx.editMessageText('Спасибо, ждём вас на мероприятии!'); return ctx.answerCallbackQuery();
 });
@@ -221,7 +242,7 @@ async function sendInvite(applicantId) {
   }
   db.prepare("UPDATE applicants SET status='invited' WHERE id=?").run(applicantId);
   const keyboard = new InlineKeyboard().text('Подтверждаю участие', `answer:yes:${invitation.id}`).text('Не смогу прийти', `answer:no:${invitation.id}`);
-  await bot.api.sendMessage(row.telegram_id, eventText(row, 'invite'), { reply_markup: keyboard }); await sendMessageImages(row.telegram_id, row.event_id, 'invite');
+  await bot.api.sendMessage(row.telegram_id, eventText(row, 'invite'), messageOptions({ reply_markup: keyboard })); await sendMessageImages(row.telegram_id, row.event_id, 'invite');
 }
 
 async function runAutomation() {
@@ -229,7 +250,7 @@ async function runAutomation() {
   for (const row of expired) {
     db.prepare("UPDATE invitations SET status='expired' WHERE id=?").run(row.id);
     db.prepare("UPDATE applicants SET status='expired' WHERE id=?").run(row.applicant_id);
-    if (row.telegram_id) { await bot.api.sendMessage(row.telegram_id, eventText(row, 'expired')).catch(console.error); await sendMessageImages(row.telegram_id, row.event_id, 'expired'); }
+    if (row.telegram_id) { await bot.api.sendMessage(row.telegram_id, eventText(row, 'expired'), messageOptions()).catch(console.error); await sendMessageImages(row.telegram_id, row.event_id, 'expired'); }
   }
   const upcoming = db.prepare(`SELECT i.*, a.telegram_id, e.id AS event_id, e.title, e.starts_at, e.reminder_text FROM invitations i
     JOIN applicants a ON a.id=i.applicant_id JOIN events e ON e.id=a.event_id
@@ -238,7 +259,7 @@ async function runAutomation() {
   for (const row of upcoming) {
     if (row.telegram_id) {
       const keyboard = new InlineKeyboard().text('Буду', `final:yes:${row.id}`).text('Не смогу прийти', `final:no:${row.id}`);
-      await bot.api.sendMessage(row.telegram_id, eventText(row, 'reminder'), { reply_markup: keyboard }).catch(console.error);
+      await bot.api.sendMessage(row.telegram_id, eventText(row, 'reminder'), messageOptions({ reply_markup: keyboard })).catch(console.error);
       await sendMessageImages(row.telegram_id, row.event_id, 'reminder');
       await sendAssets(row.telegram_id, row.event_id, 'reminder');
     }
@@ -304,7 +325,7 @@ app.post('/admin/events/:id/settings', adminOnly, (req, res) => {
 });
 app.post('/api/admin/events/:id/texts', adminOnly, (req, res) => {
   db.prepare('UPDATE events SET description=?, invite_text=?, expired_text=?, confirmed_text=?, reminder_text=?, declined_text=? WHERE id=?')
-    .run(req.body.description || null, req.body.invite_text || null, req.body.expired_text || null, req.body.confirmed_text || null, req.body.reminder_text || null, req.body.declined_text || null, req.params.id);
+    .run(telegramHtml(req.body.description || '') || null, telegramHtml(req.body.invite_text || '') || null, telegramHtml(req.body.expired_text || '') || null, telegramHtml(req.body.confirmed_text || '') || null, telegramHtml(req.body.reminder_text || '') || null, telegramHtml(req.body.declined_text || '') || null, req.params.id);
   res.json({ ok: true });
 });
 app.post('/api/admin/events/:id/message-images/:key', adminOnly, upload.array('images', 9), (req, res) => {
