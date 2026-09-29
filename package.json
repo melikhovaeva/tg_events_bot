@@ -11,6 +11,7 @@
     "test": "node --test"
   },
   "dependencies": {
+    "@radix-ui/react-dialog": "^1.1.6",
     "@radix-ui/react-slot": "^1.1.2",
     "better-sqlite3": "^11.10.0",
     "class-variance-authority": "^0.7.1",
