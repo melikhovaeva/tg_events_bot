@@ -207,6 +207,11 @@ function ImagePicker({ images, setImages }) {
     </div>
   );
 }
+function FilePicker({ files, setFiles }) {
+  const ref = useRef(null);
+  const add = (newFiles) => setFiles((current) => [...current, ...Array.from(newFiles || []).slice(0, 10 - current.length).map((file) => ({ id: crypto.randomUUID(), file, name: file.name }))]);
+  return <div className="grid gap-2"><div className="grid gap-2">{files.map((file) => <div key={file.id} className="flex items-center justify-between gap-3 rounded-md border bg-muted/20 px-3 py-2 text-sm"><div className="flex min-w-0 items-center gap-2"><FileText size={16} className="shrink-0 text-muted-foreground" />{file.url ? <a href={file.url} className="truncate hover:underline">{file.name}</a> : <span className="truncate">{file.name}</span>}</div><button type="button" onClick={() => setFiles((current) => current.filter((item) => item.id !== file.id))} className="rounded p-1 text-muted-foreground hover:bg-background hover:text-destructive" aria-label={`Удалить ${file.name}`}><Trash2 size={15} /></button></div>)}</div>{files.length < 10 && <><Button type="button" variant="outline" className="w-fit" onClick={() => ref.current?.click()}><Plus size={15} />Прикрепить файл</Button><input ref={ref} type="file" multiple className="sr-only" onChange={(event) => { add(event.target.files); event.target.value = ""; }} /></>}<p className="text-xs font-normal text-muted-foreground">До 10 файлов, размер каждого — до 20 МБ.</p></div>;
+}
 function CreateDialog({ open, setOpen, create }) {
   const [images, setImages] = useState([]);
   const submit = async (e) => {
@@ -400,27 +405,48 @@ function Checkin({ event, onBack, onCheckedIn }) {
   </>;
 }
 
-function PostEditor({ post, events, onSaved, onBack }) {
+function PostEditor({ post, events, postImages, postFiles, onSaved, onBack }) {
   const [title, setTitle] = useState(post?.title || "");
   const [content, setContent] = useState(post?.content || "");
   const [audience, setAudience] = useState(post?.audience || "all");
   const [eventId, setEventId] = useState(post?.event_id ? String(post.event_id) : "");
+  const [images, setImages] = useState(() => post ? postImages.filter((image) => image.post_id === post.id).map((image) => ({ id: image.id, serverId: image.id, url: `/api/admin/post-images/${image.id}` })) : []);
+  const [files, setFiles] = useState(() => post ? postFiles.filter((file) => file.post_id === post.id).map((file) => ({ id: file.id, serverId: file.id, name: file.original_name, url: `/api/admin/post-files/${file.id}` })) : []);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState("");
+  useEffect(() => {
+    setTitle(post?.title || ""); setContent(post?.content || ""); setAudience(post?.audience || "all"); setEventId(post?.event_id ? String(post.event_id) : "");
+    setImages(post ? postImages.filter((image) => image.post_id === post.id).map((image) => ({ id: image.id, serverId: image.id, url: `/api/admin/post-images/${image.id}` })) : []);
+    setFiles(post ? postFiles.filter((file) => file.post_id === post.id).map((file) => ({ id: file.id, serverId: file.id, name: file.original_name, url: `/api/admin/post-files/${file.id}` })) : []);
+  }, [post, postImages, postFiles]);
   const save = async () => {
     setSaving(true); setSaved(false); setError("");
     try {
       const response = await request(post ? `/api/admin/posts/${post.id}` : "/api/admin/posts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title, content, audience, event_id: eventId }) });
       const data = await response.json();
-      await onSaved(data.id); setSaved(true);
+      const postId = data.id;
+      const originalImageIds = post ? postImages.filter((image) => image.post_id === post.id).map((image) => image.id) : [];
+      const currentImageIds = images.filter((image) => image.serverId).map((image) => image.serverId);
+      await Promise.all(originalImageIds.filter((id) => !currentImageIds.includes(id)).map((id) => request(`/api/admin/post-images/${id}`, { method: "DELETE" })));
+      const newImages = images.filter((image) => image.file);
+      let addedImages = [];
+      if (newImages.length) { const body = new FormData(); newImages.forEach((image) => body.append("images", image.file)); addedImages = (await (await request(`/api/admin/posts/${postId}/images`, { method: "POST", body })).json()).images; }
+      let imageIndex = 0;
+      await request(`/api/admin/posts/${postId}/images/order`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids: images.map((image) => image.serverId || addedImages[imageIndex++].id) }) });
+      const originalFileIds = post ? postFiles.filter((file) => file.post_id === post.id).map((file) => file.id) : [];
+      const currentFileIds = files.filter((file) => file.serverId).map((file) => file.serverId);
+      await Promise.all(originalFileIds.filter((id) => !currentFileIds.includes(id)).map((id) => request(`/api/admin/post-files/${id}`, { method: "DELETE" })));
+      const newFiles = files.filter((file) => file.file);
+      if (newFiles.length) { const body = new FormData(); newFiles.forEach((file) => body.append("files", file.file)); await request(`/api/admin/posts/${postId}/files`, { method: "POST", body }); }
+      await onSaved(postId); setSaved(true);
     } catch (e) { setError(e.message); }
     finally { setSaving(false); }
   };
   return <>
     <button onClick={onBack} className="mb-5 text-sm text-muted-foreground hover:text-foreground">← Все посты</button>
     <div className="flex flex-wrap items-end justify-between gap-3"><div><h1 className="text-3xl font-semibold tracking-tight">{post ? "Редактировать пост" : "Новый пост"}</h1><p className="mt-2 text-muted-foreground">Сохраните пост — позже его можно будет отредактировать и разослать повторно.</p></div><span className="text-xs text-muted-foreground">Пост пока остаётся черновиком.</span></div>
-    <Card className="mt-7 max-w-3xl"><CardContent className="grid gap-6 p-5 sm:p-6"><label className="grid gap-2 text-sm font-medium">Название для команды<Input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Например, напоминание после события" /></label><label className="grid gap-2 text-sm font-medium">Текст поста<RichTextEditor value={content} onChange={setContent} placeholder="Напишите сообщение для гостей" /></label><div className="grid gap-2 sm:grid-cols-2"><label className="grid gap-1.5 text-sm font-medium">Аудитория<select value={audience} onChange={(event) => setAudience(event.target.value)} className="h-9 rounded-md border bg-background px-3 text-sm"><option value="all">Все, кто запустил бота</option><option value="event">Гости конкретного мероприятия</option><option value="manual">Выбрать гостей вручную</option></select></label>{audience === "event" && <label className="grid gap-1.5 text-sm font-medium">Мероприятие<select value={eventId} onChange={(event) => setEventId(event.target.value)} className="h-9 rounded-md border bg-background px-3 text-sm"><option value="">Выберите мероприятие</option>{events.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label>}</div>{error && <p className="text-sm text-destructive">{error}</p>}<div className="flex justify-end gap-2"><Button variant="outline" onClick={onBack}>Назад</Button><Button onClick={save} disabled={saving || !title.trim() || (audience === "event" && !eventId)}>{saving ? "Сохраняем…" : saved ? "Сохранено" : "Сохранить черновик"}</Button></div></CardContent></Card>
+    <Card className="mt-7 max-w-3xl"><CardContent className="grid gap-6 p-5 sm:p-6"><label className="grid gap-2 text-sm font-medium">Название для команды<Input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Например, напоминание после события" /></label><label className="grid gap-2 text-sm font-medium">Текст поста<RichTextEditor value={content} onChange={setContent} placeholder="Напишите сообщение для гостей" /></label><div className="grid gap-2 text-sm font-medium">Изображения<ImagePicker images={images} setImages={setImages} /></div><div className="grid gap-2 text-sm font-medium">Файлы<FilePicker files={files} setFiles={setFiles} /></div><div className="grid gap-2 sm:grid-cols-2"><label className="grid gap-1.5 text-sm font-medium">Аудитория<select value={audience} onChange={(event) => setAudience(event.target.value)} className="h-9 rounded-md border bg-background px-3 text-sm"><option value="all">Все, кто запустил бота</option><option value="event">Гости конкретного мероприятия</option><option value="manual">Выбрать гостей вручную</option></select></label>{audience === "event" && <label className="grid gap-1.5 text-sm font-medium">Мероприятие<select value={eventId} onChange={(event) => setEventId(event.target.value)} className="h-9 rounded-md border bg-background px-3 text-sm"><option value="">Выберите мероприятие</option>{events.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label>}</div>{error && <p className="text-sm text-destructive">{error}</p>}<div className="flex justify-end gap-2"><Button variant="outline" onClick={onBack}>Назад</Button><Button onClick={save} disabled={saving || !title.trim() || (audience === "event" && !eventId)}>{saving ? "Сохраняем…" : saved ? "Сохранено" : "Сохранить черновик"}</Button></div></CardContent></Card>
   </>;
 }
 
@@ -738,7 +764,7 @@ function App() {
               <div className="mt-7 grid max-w-3xl gap-3">{state.posts.length ? state.posts.map((post) => <Card key={post.id}><CardContent className="flex items-start justify-between gap-4 p-4 sm:p-5"><div className="min-w-0"><h2 className="font-semibold">{post.title}</h2><p className="mt-1 line-clamp-2 text-sm leading-6 text-muted-foreground">{plainText(post.content) || "Текст пока не добавлен"}</p><p className="mt-3 text-xs text-muted-foreground">{post.audience === "all" ? "Все в боте" : post.audience === "event" ? `Гости: ${post.event_title || "мероприятие не выбрано"}` : "Гости выбраны вручную"} · изменён {fmt(post.updated_at)}</p></div><Button variant="secondary" size="sm" onClick={() => { setActiveBroadcast(post.id); setPage("postEditor"); }}><Pencil size={14} />Редактировать</Button></CardContent></Card>) : <Card><CardContent className="p-6 text-sm text-muted-foreground">Постов пока нет. Создайте первый, чтобы сохранить его для будущих рассылок.</CardContent></Card>}</div>
             </>
           )}
-          {page === "postEditor" && <PostEditor post={activeBroadcast ? state.posts.find((post) => post.id === activeBroadcast) : null} events={state.events} onSaved={async (id) => { setActiveBroadcast(id); await load(active); }} onBack={() => setPage("posts")} />}
+          {page === "postEditor" && <PostEditor post={activeBroadcast ? state.posts.find((post) => post.id === activeBroadcast) : null} events={state.events} postImages={state.postImages || []} postFiles={state.postFiles || []} onSaved={async (id) => { setActiveBroadcast(id); await load(active); }} onBack={() => setPage("posts")} />}
       </main>
       <CreateDialog open={open} setOpen={setOpen} create={create} />
     </div>
