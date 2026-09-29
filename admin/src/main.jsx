@@ -311,28 +311,40 @@ function EventTexts({ event, messageImages = [], onEdit }) {
 
 function RichTextEditor({ value, onChange, placeholder }) {
   const ref = useRef(null);
+  const range = useRef(null);
+  const [linkOpen, setLinkOpen] = useState(false);
+  const [linkUrl, setLinkUrl] = useState("");
+  const [linkError, setLinkError] = useState("");
   useEffect(() => { if (ref.current && ref.current.innerHTML !== value) ref.current.innerHTML = value; }, [value]);
   const preserve = (event) => event.preventDefault();
   const command = (name, arg = null) => { ref.current?.focus(); document.execCommand(name, false, arg); onChange(ref.current?.innerHTML || ""); };
-  const addLink = () => {
-    const url = window.prompt("Вставьте ссылку (https://...)");
-    if (!url) return;
-    try { const parsed = new URL(url); if (!/^https?:$/.test(parsed.protocol)) throw new Error(); }
-    catch { window.alert("Нужна ссылка, начинающаяся с http:// или https://"); return; }
-    const selected = window.getSelection()?.toString();
+  const openLink = () => {
+    const selection = window.getSelection();
+    range.current = selection?.rangeCount ? selection.getRangeAt(0).cloneRange() : null;
+    setLinkUrl(""); setLinkError(""); setLinkOpen(true);
+  };
+  const addLink = (event) => {
+    event.preventDefault();
+    try { const parsed = new URL(linkUrl); if (!/^https?:$/.test(parsed.protocol)) throw new Error(); }
+    catch { setLinkError("Укажите ссылку, которая начинается с https:// или http://"); return; }
     ref.current?.focus();
-    if (selected) command("createLink", url);
-    else command("insertHTML", `<a href="${url}">${url}</a>`);
+    if (range.current) { const selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(range.current); }
+    const selected = window.getSelection()?.toString();
+    if (selected) command("createLink", linkUrl);
+    else command("insertHTML", `<a href="${linkUrl}">${linkUrl}</a>`);
+    setLinkOpen(false);
   };
   const tools = [["bold", Bold, "Жирный"], ["italic", Italic, "Курсив"], ["underline", Underline, "Подчёркнутый"], ["strikeThrough", Strikethrough, "Зачёркнутый"]];
-  return <div className="overflow-hidden rounded-md border bg-background focus-within:ring-2 focus-within:ring-ring">
-    <div className="flex items-center gap-1 border-b bg-muted/40 p-1.5">
-      {tools.map(([name, Icon, label]) => <button key={name} type="button" title={label} aria-label={label} onMouseDown={preserve} onClick={() => command(name)} className="rounded p-1.5 hover:bg-background"><Icon size={16} /></button>)}
-      <span className="mx-1 h-5 w-px bg-border" />
-      <button type="button" title="Вставить ссылку" aria-label="Вставить ссылку" onMouseDown={preserve} onClick={addLink} className="rounded p-1.5 hover:bg-background"><Link size={16} /></button>
+  return <><div className="overflow-hidden rounded-md border bg-background focus-within:ring-2 focus-within:ring-ring">
+      <div className="flex items-center gap-1 border-b bg-muted/40 p-1.5">
+        {tools.map(([name, Icon, label]) => <button key={name} type="button" title={label} aria-label={label} onMouseDown={preserve} onClick={() => command(name)} className="rounded p-1.5 hover:bg-background"><Icon size={16} /></button>)}
+        <span className="mx-1 h-5 w-px bg-border" />
+        <button type="button" title="Вставить ссылку" aria-label="Вставить ссылку" onMouseDown={preserve} onClick={openLink} className="rounded p-1.5 hover:bg-background"><Link size={16} /></button>
+      </div>
+      <div ref={ref} contentEditable suppressContentEditableWarning role="textbox" aria-multiline="true" data-placeholder={placeholder} onInput={(event) => onChange(event.currentTarget.innerHTML)} className="min-h-44 px-3 py-2.5 text-sm leading-6 outline-none empty:before:pointer-events-none empty:before:text-muted-foreground empty:before:content-[attr(data-placeholder)]" />
     </div>
-    <div ref={ref} contentEditable suppressContentEditableWarning role="textbox" aria-multiline="true" data-placeholder={placeholder} onInput={(event) => onChange(event.currentTarget.innerHTML)} className="min-h-44 px-3 py-2.5 text-sm leading-6 outline-none empty:before:pointer-events-none empty:before:text-muted-foreground empty:before:content-[attr(data-placeholder)]" />
-  </div>;
+    <Dialog open={linkOpen} onOpenChange={setLinkOpen}><DialogContent className="max-w-md"><DialogHeader><DialogTitle>Добавить ссылку</DialogTitle><DialogDescription>Выделите текст в сообщении или вставьте ссылку отдельно.</DialogDescription></DialogHeader><form onSubmit={addLink} className="grid gap-4"><label className="grid gap-1.5 text-sm font-medium">Ссылка<Input autoFocus type="url" inputMode="url" value={linkUrl} onChange={(event) => { setLinkUrl(event.target.value); setLinkError(""); }} placeholder="https://example.com" /></label>{linkError && <p className="text-sm text-destructive">{linkError}</p>}<div className="flex justify-end gap-2"><Button type="button" variant="outline" onClick={() => setLinkOpen(false)}>Отмена</Button><Button disabled={!linkUrl.trim()}>Добавить</Button></div></form></DialogContent></Dialog>
+  </>;
 }
 
 function TextPostEditor({ event, post, messageImages, onSaved, onBack }) {
