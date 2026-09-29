@@ -401,15 +401,19 @@ function Checkin({ event, onBack, onCheckedIn }) {
 }
 
 function App() {
+  const initialRoute = new URLSearchParams(window.location.search);
+  const initialPage = initialRoute.get("page") || "events";
+  const initialEvent = Number(initialRoute.get("event")) || null;
+  const initialPost = initialRoute.get("post") || null;
   const [state, setState] = useState({
     events: [],
     people: [],
     guests: [],
     assets: [],
   });
-  const [page, setPage] = useState("events");
-  const [active, setActive] = useState(null);
-  const [activePost, setActivePost] = useState(null);
+  const [page, setPage] = useState(initialPage);
+  const [active, setActive] = useState(initialEvent);
+  const [activePost, setActivePost] = useState(initialPost);
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState("");
@@ -424,8 +428,17 @@ function App() {
     }
   };
   useEffect(() => {
-    load();
+    load(initialEvent);
   }, []);
+  useEffect(() => {
+    const params = new URLSearchParams();
+    const needsEvent = ["detail", "texts", "textEditor", "checkin"].includes(page);
+    if (page !== "events") params.set("page", page);
+    if (needsEvent && active) params.set("event", active);
+    if (page === "textEditor" && activePost) params.set("post", activePost);
+    const query = params.toString();
+    window.history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}`);
+  }, [page, active, activePost]);
   const event = state.events.find((e) => e.id === active);
   const create = async (form, images) => {
     const body = new FormData(form);
@@ -449,6 +462,7 @@ function App() {
     setTimeout(() => setCopied(false), 1600);
   };
   const openEvent = (id) => {
+    setActive(id);
     load(id);
     setPage("detail");
   };
