@@ -4,6 +4,7 @@ import {
   CalendarDays,
   Check,
   Copy,
+  FileText,
   GripVertical,
   ImagePlus,
   LayoutDashboard,
@@ -411,10 +412,16 @@ function App() {
                     {fmt(event.starts_at)}
                   </p>
                 </div>
-                <Button variant="outline" onClick={copy}>
-                  {copied ? <Check size={15} /> : <Copy size={15} />}
-                  {copied ? "Скопировано" : "Скопировать ссылку"}
-                </Button>
+                <div className="flex gap-2">
+                  <Button variant="outline" onClick={() => setPage("texts")}>
+                    <FileText size={15} />
+                    Тексты
+                  </Button>
+                  <Button variant="outline" onClick={copy}>
+                    {copied ? <Check size={15} /> : <Copy size={15} />}
+                    {copied ? "Скопировано" : "Скопировать ссылку"}
+                  </Button>
+                </div>
               </div>
               <div className="mt-7 grid gap-4 md:grid-cols-3">
                 <Stat
@@ -427,7 +434,6 @@ function App() {
                   value={count(event.confirmed)}
                 />
               </div>
-              <EventTexts event={event} onSaved={() => load(event.id)} />
               <Card className="mt-6">
                 <CardHeader>
                   <CardTitle>Заявки</CardTitle>
@@ -475,6 +481,23 @@ function App() {
                   </table>
                 </CardContent>
               </Card>
+            </>
+          )}
+          {page === "texts" && event && (
+            <>
+              <button
+                onClick={() => setPage("detail")}
+                className="mb-5 text-sm text-muted-foreground hover:text-foreground"
+              >
+                ← {event.title}
+              </button>
+              <h1 className="text-3xl font-semibold tracking-tight">
+                Тексты события
+              </h1>
+              <p className="mt-2 text-muted-foreground">
+                Настройте карточку мероприятия, приглашение и сообщение об отказе.
+              </p>
+              <EventTexts event={event} onSaved={() => load(event.id)} />
             </>
           )}
           {page === "guests" && (
