@@ -58,6 +58,11 @@ CREATE TABLE IF NOT EXISTS event_images (
   id INTEGER PRIMARY KEY, event_id INTEGER NOT NULL REFERENCES events(id), original_name TEXT NOT NULL,
   stored_name TEXT NOT NULL UNIQUE, position INTEGER NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS event_message_images (
+  id INTEGER PRIMARY KEY, event_id INTEGER NOT NULL REFERENCES events(id), message_key TEXT NOT NULL,
+  original_name TEXT NOT NULL, stored_name TEXT NOT NULL UNIQUE, position INTEGER NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 `);
 for (const [table, column, definition] of [
   ['events', 'description', 'TEXT'], ['events', 'venue', 'TEXT'], ['applicants', 'phone', 'TEXT'],
@@ -85,6 +90,10 @@ async function sendAssets(telegramId, eventId, stage) {
   const assets = db.prepare('SELECT * FROM event_assets WHERE event_id=? AND delivery_stage=?').all(eventId, stage);
   for (const asset of assets) await bot.api.sendDocument(telegramId, new InputFile(path.join(uploadsDir, asset.stored_name), asset.original_name)).catch(console.error);
 }
+async function sendMessageImages(telegramId, eventId, key) {
+  const images = db.prepare('SELECT * FROM event_message_images WHERE event_id=? AND message_key=? ORDER BY position').all(eventId, key);
+  if (images.length) await bot.api.sendMediaGroup(telegramId, images.map(image => ({ type: 'photo', media: new InputFile(path.join(uploadsDir, image.stored_name), image.original_name) }))).catch(console.error);
+}
 const adminOnly = (req, res, next) => {
   const header = req.headers.authorization || '';
   const [kind, encoded] = header.split(' ');
@@ -108,6 +117,7 @@ bot.command('start', async ctx => {
     const images = db.prepare('SELECT * FROM event_images WHERE event_id=? ORDER BY position').all(event.id);
     if (images.length) await bot.api.sendMediaGroup(ctx.chat.id, images.map((image, index) => ({ type: 'photo', media: new InputFile(path.join(uploadsDir, image.stored_name), image.original_name), caption: index === 0 ? `«${event.title}»` : undefined })));
     else if (event.cover_stored_name) await ctx.replyWithPhoto(new InputFile(path.join(uploadsDir, event.cover_stored_name), event.cover_original_name || 'cover'), { caption: `«${event.title}»` });
+    await sendMessageImages(ctx.chat.id, event.id, 'registration');
     return ctx.reply(`«${event.title}»\n\n${details}`, { reply_markup: keyboard });
   }
   if (!claim) return ctx.reply('Добро пожаловать! Откройте ссылку на мероприятие, чтобы подать заявку.');
@@ -167,13 +177,13 @@ bot.callbackQuery(/^answer:(yes|no):(\d+)$/, async ctx => {
   if (answer === 'no') {
     db.prepare("UPDATE invitations SET status='declined', responded_at=? WHERE id=?").run(nowIso(), id);
     db.prepare("UPDATE applicants SET status='declined' WHERE id=?").run(row.applicant_id);
-    await ctx.editMessageText(eventText(row, 'declined'));
+    await ctx.editMessageText(eventText(row, 'declined')); await sendMessageImages(row.telegram_id, row.event_id, 'declined');
   } else {
     const checkinToken = token();
     db.prepare("UPDATE invitations SET status='confirmed', responded_at=?, checkin_token=? WHERE id=?").run(nowIso(), checkinToken, id);
     db.prepare("UPDATE applicants SET status='confirmed' WHERE id=?").run(row.applicant_id);
     const qr = await QRCode.toBuffer(checkinToken, { width: 700, margin: 2 });
-    await ctx.editMessageText(eventText(row, 'confirmed'), { reply_markup: new InlineKeyboard().text('Не смогу прийти', `cancel:${id}`) });
+    await ctx.editMessageText(eventText(row, 'confirmed'), { reply_markup: new InlineKeyboard().text('Не смогу прийти', `cancel:${id}`) }); await sendMessageImages(row.telegram_id, row.event_id, 'confirmed');
     if (row.chat_url) await ctx.reply(`Пока можете присоединиться к чату мероприятия: ${row.chat_url}`);
     await sendAssets(row.telegram_id, row.event_id, 'confirmed');
     await ctx.replyWithPhoto(new Uint8Array(qr), { caption: `Ваш QR для входа на «${row.title}». Сохраните его.\nРезервный код: ${checkinToken.slice(0, 8).toUpperCase()}` });
@@ -182,18 +192,18 @@ bot.callbackQuery(/^answer:(yes|no):(\d+)$/, async ctx => {
 });
 
 bot.callbackQuery(/^cancel:(\d+)$/, async ctx => {
-  const row = db.prepare(`SELECT i.*, a.telegram_id, a.id applicant_id, e.title, e.declined_text FROM invitations i JOIN applicants a ON a.id=i.applicant_id JOIN events e ON e.id=a.event_id WHERE i.id=?`).get(ctx.match[1]);
+  const row = db.prepare(`SELECT i.*, a.telegram_id, a.id applicant_id, e.id event_id, e.title, e.declined_text FROM invitations i JOIN applicants a ON a.id=i.applicant_id JOIN events e ON e.id=a.event_id WHERE i.id=?`).get(ctx.match[1]);
   if (!row || row.telegram_id !== String(ctx.from.id) || row.status !== 'confirmed') return ctx.answerCallbackQuery({ text: 'Это участие уже нельзя отменить.', show_alert: true });
   db.prepare("UPDATE invitations SET status='declined', responded_at=? WHERE id=?").run(nowIso(), row.id);
   db.prepare("UPDATE applicants SET status='declined' WHERE id=?").run(row.applicant_id);
-  await ctx.editMessageText(eventText(row, 'declined'));
+  await ctx.editMessageText(eventText(row, 'declined')); await sendMessageImages(row.telegram_id, row.event_id, 'declined');
   return ctx.answerCallbackQuery();
 });
 bot.callbackQuery(/^final:(yes|no):(\d+)$/, async ctx => {
   const [, answer, id] = ctx.match;
-  const row = db.prepare('SELECT i.*, a.telegram_id, a.id applicant_id, e.declined_text, e.title FROM invitations i JOIN applicants a ON a.id=i.applicant_id JOIN events e ON e.id=a.event_id WHERE i.id=?').get(id);
+  const row = db.prepare('SELECT i.*, a.telegram_id, a.id applicant_id, e.id event_id, e.declined_text, e.title FROM invitations i JOIN applicants a ON a.id=i.applicant_id JOIN events e ON e.id=a.event_id WHERE i.id=?').get(id);
   if (!row || row.telegram_id !== String(ctx.from.id) || row.status !== 'confirmed') return ctx.answerCallbackQuery({ text: 'Приглашение не найдено.', show_alert: true });
-  if (answer === 'no') { db.prepare("UPDATE invitations SET status='declined', responded_at=? WHERE id=?").run(nowIso(), id); db.prepare("UPDATE applicants SET status='declined' WHERE id=?").run(row.applicant_id); await ctx.editMessageText(eventText(row, 'declined')); return ctx.answerCallbackQuery(); }
+  if (answer === 'no') { db.prepare("UPDATE invitations SET status='declined', responded_at=? WHERE id=?").run(nowIso(), id); db.prepare("UPDATE applicants SET status='declined' WHERE id=?").run(row.applicant_id); await ctx.editMessageText(eventText(row, 'declined')); await sendMessageImages(row.telegram_id, row.event_id, 'declined'); return ctx.answerCallbackQuery(); }
   db.prepare('UPDATE invitations SET final_confirmed_at=? WHERE id=?').run(nowIso(), id);
   await ctx.editMessageText('Спасибо, ждём вас на мероприятии!'); return ctx.answerCallbackQuery();
 });
@@ -211,15 +221,15 @@ async function sendInvite(applicantId) {
   }
   db.prepare("UPDATE applicants SET status='invited' WHERE id=?").run(applicantId);
   const keyboard = new InlineKeyboard().text('Подтверждаю участие', `answer:yes:${invitation.id}`).text('Не смогу прийти', `answer:no:${invitation.id}`);
-  await bot.api.sendMessage(row.telegram_id, eventText(row, 'invite'), { reply_markup: keyboard });
+  await bot.api.sendMessage(row.telegram_id, eventText(row, 'invite'), { reply_markup: keyboard }); await sendMessageImages(row.telegram_id, row.event_id, 'invite');
 }
 
 async function runAutomation() {
-  const expired = db.prepare("SELECT i.*, a.telegram_id, a.id applicant_id, e.title, e.expired_text FROM invitations i JOIN applicants a ON a.id=i.applicant_id JOIN events e ON e.id=a.event_id WHERE i.status='pending' AND i.expires_at <= ?").all(nowIso());
+  const expired = db.prepare("SELECT i.*, a.telegram_id, a.id applicant_id, e.id AS event_id, e.title, e.expired_text FROM invitations i JOIN applicants a ON a.id=i.applicant_id JOIN events e ON e.id=a.event_id WHERE i.status='pending' AND i.expires_at <= ?").all(nowIso());
   for (const row of expired) {
     db.prepare("UPDATE invitations SET status='expired' WHERE id=?").run(row.id);
     db.prepare("UPDATE applicants SET status='expired' WHERE id=?").run(row.applicant_id);
-    if (row.telegram_id) await bot.api.sendMessage(row.telegram_id, eventText(row, 'expired')).catch(console.error);
+    if (row.telegram_id) { await bot.api.sendMessage(row.telegram_id, eventText(row, 'expired')).catch(console.error); await sendMessageImages(row.telegram_id, row.event_id, 'expired'); }
   }
   const upcoming = db.prepare(`SELECT i.*, a.telegram_id, e.id AS event_id, e.title, e.starts_at, e.reminder_text FROM invitations i
     JOIN applicants a ON a.id=i.applicant_id JOIN events e ON e.id=a.event_id
@@ -229,6 +239,7 @@ async function runAutomation() {
     if (row.telegram_id) {
       const keyboard = new InlineKeyboard().text('Буду', `final:yes:${row.id}`).text('Не смогу прийти', `final:no:${row.id}`);
       await bot.api.sendMessage(row.telegram_id, eventText(row, 'reminder'), { reply_markup: keyboard }).catch(console.error);
+      await sendMessageImages(row.telegram_id, row.event_id, 'reminder');
       await sendAssets(row.telegram_id, row.event_id, 'reminder');
     }
     db.prepare('UPDATE invitations SET reminder_sent_at=? WHERE id=?').run(nowIso(), row.id);
@@ -257,7 +268,8 @@ app.get('/api/admin/state', adminOnly, (req, res) => {
   const assets = selected ? db.prepare('SELECT * FROM event_assets WHERE event_id=? ORDER BY created_at DESC').all(selected) : [];
   const guests = db.prepare(`SELECT a.telegram_id, a.telegram_name, a.name, a.phone, MAX(a.created_at) AS last_seen,
     COUNT(a.id) AS events_count FROM applicants a GROUP BY COALESCE(a.telegram_id, 'applicant:' || a.id) ORDER BY last_seen DESC`).all();
-  res.json({ events, selected, people, assets, guests, botUsername: process.env.BOT_USERNAME });
+  const messageImages = selected ? db.prepare('SELECT id,message_key,original_name,position FROM event_message_images WHERE event_id=? ORDER BY position').all(selected) : [];
+  res.json({ events, selected, people, assets, guests, messageImages, botUsername: process.env.BOT_USERNAME });
 });
 app.get('/admin/legacy', adminOnly, (req, res) => {
   const events = db.prepare('SELECT * FROM events ORDER BY starts_at DESC').all();
@@ -293,6 +305,37 @@ app.post('/admin/events/:id/settings', adminOnly, (req, res) => {
 app.post('/api/admin/events/:id/texts', adminOnly, (req, res) => {
   db.prepare('UPDATE events SET description=?, invite_text=?, expired_text=?, confirmed_text=?, reminder_text=?, declined_text=? WHERE id=?')
     .run(req.body.description || null, req.body.invite_text || null, req.body.expired_text || null, req.body.confirmed_text || null, req.body.reminder_text || null, req.body.declined_text || null, req.params.id);
+  res.json({ ok: true });
+});
+app.post('/api/admin/events/:id/message-images/:key', adminOnly, upload.array('images', 9), (req, res) => {
+  const messageKeys = new Set(['registration', 'invite', 'expired', 'confirmed', 'declined', 'reminder']);
+  if (!messageKeys.has(req.params.key)) return res.status(400).json({ error: 'Неизвестный тип сообщения' });
+  const files = req.files || [];
+  if (files.some(file => !file.mimetype.startsWith('image/'))) return res.status(400).json({ error: 'Можно загрузить только изображения' });
+  const currentCount = db.prepare('SELECT COUNT(*) AS count FROM event_message_images WHERE event_id=? AND message_key=?').get(req.params.id, req.params.key).count;
+  if (currentCount + files.length > 9) return res.status(400).json({ error: 'В одном сообщении может быть не больше 9 изображений' });
+  const position = db.prepare('SELECT COALESCE(MAX(position), -1) AS max FROM event_message_images WHERE event_id=? AND message_key=?').get(req.params.id, req.params.key).max;
+  const insert = db.prepare('INSERT INTO event_message_images (event_id,message_key,original_name,stored_name,position) VALUES (?,?,?,?,?)');
+  const images = files.map((file, index) => {
+    const result = insert.run(req.params.id, req.params.key, file.originalname, file.filename, position + index + 1);
+    return { id: Number(result.lastInsertRowid), original_name: file.originalname, position: position + index + 1 };
+  });
+  res.json({ ok: true, images });
+});
+app.get('/api/admin/message-images/:id', adminOnly, (req, res) => { const image = db.prepare('SELECT * FROM event_message_images WHERE id=?').get(req.params.id); if (!image) return res.sendStatus(404); return res.sendFile(path.join(uploadsDir, image.stored_name)); });
+app.delete('/api/admin/message-images/:id', adminOnly, (req, res) => {
+  const image = db.prepare('SELECT * FROM event_message_images WHERE id=?').get(req.params.id);
+  if (!image) return res.sendStatus(404);
+  db.prepare('DELETE FROM event_message_images WHERE id=?').run(req.params.id);
+  fs.unlink(path.join(uploadsDir, image.stored_name), () => {});
+  res.json({ ok: true });
+});
+app.post('/api/admin/events/:id/message-images/:key/order', adminOnly, (req, res) => {
+  const ids = Array.isArray(req.body.ids) ? req.body.ids.map(Number) : [];
+  const found = db.prepare(`SELECT id FROM event_message_images WHERE event_id=? AND message_key=? ORDER BY position`).all(req.params.id, req.params.key).map(image => image.id);
+  if (ids.length !== found.length || ids.some(id => !found.includes(id)) || new Set(ids).size !== ids.length) return res.status(400).json({ error: 'Не удалось изменить порядок изображений' });
+  const update = db.prepare('UPDATE event_message_images SET position=? WHERE id=?');
+  db.transaction(() => ids.forEach((id, position) => update.run(position, id)))();
   res.json({ ok: true });
 });
 app.post('/admin/events/:id/assets', adminOnly, upload.single('material'), (req, res) => {

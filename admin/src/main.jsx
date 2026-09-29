@@ -9,6 +9,7 @@ import {
   ImagePlus,
   LayoutDashboard,
   MessageSquare,
+  Pencil,
   Plus,
   Replace,
   Send,
@@ -268,17 +269,88 @@ function Stat({ label, value }) {
   );
 }
 
-function EventTexts({ event, onSaved }) {
+const textPosts = [
+  { key: "registration", field: "description", title: "Регистрация", hint: "Карточка, которую человек увидит перед заявкой.", placeholder: "Расскажите, что будет на событии" },
+  { key: "invite", field: "invite_text", title: "Приглашение", hint: "Приходит, когда вы вручную приглашаете гостя.", placeholder: "Мы будем рады видеть вас на {event}!" },
+  { key: "expired", field: "expired_text", title: "Нет ответа 24 часа", hint: "Отправляется, если приглашение осталось без ответа.", placeholder: "К сожалению, мы не дождались вашего ответа и освобождаем место." },
+  { key: "confirmed", field: "confirmed_text", title: "Участие подтверждено", hint: "Гость видит его после нажатия «Подтверждаю участие».", placeholder: "Участие подтверждено — место закреплено за вами." },
+  { key: "declined", field: "declined_text", title: "Пользователь отказался", hint: "Отправляется, если гость отказался или отменил участие.", placeholder: "Спасибо, что сообщили. Будем рады видеть вас на следующих мероприятиях!" },
+  { key: "reminder", field: "reminder_text", title: "Напоминание за сутки", hint: "С просьбой ещё раз подтвердить, что гость придёт.", placeholder: "Напоминаем: «{event}» уже завтра. Ждём вас!" },
+];
+
+function EventTexts({ event, messageImages = [], onSaved }) {
   const [texts, setTexts] = useState({});
-  const [saved, setSaved] = useState(false);
-  useEffect(() => setTexts({ description: event.description || '', invite_text: event.invite_text || '', expired_text: event.expired_text || '', confirmed_text: event.confirmed_text || '', reminder_text: event.reminder_text || '', declined_text: event.declined_text || '' }), [event]);
-  const save = async e => {
-    e.preventDefault();
-    await request(`/api/admin/events/${event.id}/texts`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(texts) });
-    setSaved(true); onSaved(); window.setTimeout(() => setSaved(false), 1800);
+  const [images, setImages] = useState({});
+  const [editing, setEditing] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    setTexts({ description: event.description || "", invite_text: event.invite_text || "", expired_text: event.expired_text || "", confirmed_text: event.confirmed_text || "", reminder_text: event.reminder_text || "", declined_text: event.declined_text || "" });
+    setImages(Object.fromEntries(textPosts.map((post) => [post.key, messageImages.filter((image) => image.message_key === post.key).map((image) => ({ id: image.id, serverId: image.id, url: `/api/admin/message-images/${image.id}` }))])));
+  }, [event, messageImages]);
+
+  const save = async (post) => {
+    setSaving(true);
+    setError("");
+    try {
+      await request(`/api/admin/events/${event.id}/texts`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(texts) });
+      const current = images[post.key] || [];
+      const originalIds = messageImages.filter((image) => image.message_key === post.key).map((image) => image.id);
+      const currentServerIds = current.filter((image) => image.serverId).map((image) => image.serverId);
+      await Promise.all(originalIds.filter((id) => !currentServerIds.includes(id)).map((id) => request(`/api/admin/message-images/${id}`, { method: "DELETE" })));
+      const newImages = current.filter((image) => image.file);
+      let added = [];
+      if (newImages.length) {
+        const body = new FormData();
+        newImages.forEach((image) => body.append("images", image.file));
+        added = (await (await request(`/api/admin/events/${event.id}/message-images/${post.key}`, { method: "POST", body })).json()).images;
+      }
+      let nextAdded = 0;
+      const ids = current.map((image) => image.serverId || added[nextAdded++].id);
+      await request(`/api/admin/events/${event.id}/message-images/${post.key}/order`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids }) });
+      await onSaved();
+      setEditing(null);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setSaving(false);
+    }
   };
-  const field = (key, title, hint) => <label className="grid gap-1.5 text-sm font-medium">{title}<Textarea value={texts[key]} onChange={e => setTexts({ ...texts, [key]: e.target.value })} placeholder={hint}/></label>;
-  return <form onSubmit={save} className="mt-6 grid gap-5"><Card><CardHeader><CardTitle>Регистрация</CardTitle><CardDescription>Текст карточки, которую человек увидит перед подачей заявки.</CardDescription></CardHeader><CardContent>{field('description', 'Карточка мероприятия', 'Расскажите, что будет на событии')}</CardContent></Card><Card><CardHeader><CardTitle>Приглашение</CardTitle><CardDescription>Все сообщения, связанные с вашим решением по заявке.</CardDescription></CardHeader><CardContent className="grid gap-5">{field('invite_text', 'Текст приглашения', 'Мы будем рады видеть вас на {event}!')}{field('expired_text', 'Нет ответа 24 часа', 'К сожалению, мы не дождались вашего ответа и освобождаем место.')}{field('confirmed_text', 'Участие подтверждено', 'Участие подтверждено — место закреплено за вами.')}{field('declined_text', 'Пользователь отказался', 'Спасибо, что сообщили. Будем рады видеть вас на следующих мероприятиях!')}</CardContent></Card><Card><CardHeader><CardTitle>Напоминание за сутки</CardTitle><CardDescription>Бот отправит это сообщение и предложит финально подтвердить участие или отказаться.</CardDescription></CardHeader><CardContent>{field('reminder_text', 'Текст напоминания', 'Напоминаем: «{event}» уже завтра. Ждём вас!')}</CardContent></Card><div><Button>{saved ? <Check size={15}/> : null}{saved ? 'Сохранено' : 'Сохранить тексты'}</Button></div></form>;
+
+  return <div className="mt-7 grid max-w-3xl gap-3">
+    {textPosts.map((post) => {
+      const postImages = images[post.key] || [];
+      const isOpen = editing === post.key;
+      const preview = texts[post.field]?.trim() || post.placeholder;
+      return <Card key={post.key} className={isOpen ? "border-foreground/25" : ""}>
+        <CardContent className="p-4 sm:p-5">
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <h2 className="text-base font-semibold">{post.title}</h2>
+              <p className="mt-1 line-clamp-2 text-sm leading-6 text-muted-foreground">{preview}</p>
+              {!!postImages.length && <div className="mt-3 flex -space-x-1.5">{postImages.slice(0, 5).map((image) => <img key={image.id} src={image.url} className="h-8 w-8 rounded-md border-2 border-background object-cover" />)}{postImages.length > 5 && <span className="flex h-8 w-8 items-center justify-center rounded-md border-2 border-background bg-muted text-xs">+{postImages.length - 5}</span>}</div>}
+            </div>
+            <Button variant={isOpen ? "outline" : "secondary"} size="sm" onClick={() => setEditing(isOpen ? null : post.key)}>
+              <Pencil size={14} />
+              {isOpen ? "Закрыть" : "Редактировать"}
+            </Button>
+          </div>
+          {isOpen && <div className="mt-5 grid gap-4 border-t pt-5">
+            <label className="grid gap-1.5 text-sm font-medium">Текст сообщения
+              <Textarea value={texts[post.field] || ""} onChange={(e) => setTexts({ ...texts, [post.field]: e.target.value })} placeholder={post.placeholder} />
+            </label>
+            <div className="grid gap-1.5 text-sm font-medium">Изображения
+              <ImagePicker images={postImages} setImages={(value) => setImages((all) => ({ ...all, [post.key]: typeof value === "function" ? value(all[post.key] || []) : value }))} />
+            </div>
+            <p className="text-xs text-muted-foreground">Изображения отправятся отдельным альбомом сразу после этого сообщения.</p>
+            {error && <p className="text-sm text-destructive">{error}</p>}
+            <div className="flex justify-end gap-2"><Button variant="outline" onClick={() => setEditing(null)}>Отмена</Button><Button onClick={() => save(post)} disabled={saving}>{saving ? "Сохраняем…" : "Сохранить"}</Button></div>
+          </div>}
+        </CardContent>
+      </Card>;
+    })}
+  </div>;
 }
 
 function App() {
@@ -495,9 +567,9 @@ function App() {
                 Тексты события
               </h1>
               <p className="mt-2 text-muted-foreground">
-                Настройте карточку мероприятия, приглашение и сообщение об отказе.
+                Шесть сообщений для пути гостя — каждое с собственным текстом и изображениями.
               </p>
-              <EventTexts event={event} onSaved={() => load(event.id)} />
+              <EventTexts event={event} messageImages={state.messageImages} onSaved={() => load(event.id)} />
             </>
           )}
           {page === "guests" && (
