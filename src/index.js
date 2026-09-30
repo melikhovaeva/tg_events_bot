@@ -338,10 +338,11 @@ app.get('/api/admin/state', adminOnly, (req, res) => {
   const guests = db.prepare(`SELECT a.telegram_id, a.telegram_name, a.name, a.phone, MAX(a.created_at) AS last_seen,
     COUNT(a.id) AS events_count FROM applicants a GROUP BY COALESCE(a.telegram_id, 'applicant:' || a.id) ORDER BY last_seen DESC`).all();
   const messageImages = selected ? db.prepare('SELECT id,message_key,original_name,position FROM event_message_images WHERE event_id=? ORDER BY position').all(selected) : [];
+  const eventImages = selected ? db.prepare('SELECT id,event_id,original_name,position FROM event_images WHERE event_id=? ORDER BY position').all(selected) : [];
   const posts = db.prepare(`SELECT p.*, e.title AS event_title FROM posts p LEFT JOIN events e ON e.id=p.event_id ORDER BY p.updated_at DESC`).all();
   const postImages = db.prepare('SELECT id,post_id,original_name,position FROM post_images ORDER BY position').all();
   const postFiles = db.prepare('SELECT id,post_id,original_name FROM post_files ORDER BY created_at').all();
-  res.json({ events, selected, people, assets, guests, messageImages, posts, postImages, postFiles, botUsername: process.env.BOT_USERNAME });
+  res.json({ events, selected, people, assets, guests, messageImages, eventImages, posts, postImages, postFiles, botUsername: process.env.BOT_USERNAME });
 });
 app.get('/admin/legacy', adminOnly, (req, res) => {
   const events = db.prepare('SELECT * FROM events ORDER BY starts_at DESC').all();
@@ -382,6 +383,39 @@ app.post('/api/admin/events/:id/texts', adminOnly, (req, res) => {
 app.post('/api/admin/events/:id/registration', adminOnly, (req, res) => {
   db.prepare('UPDATE events SET registration_open=? WHERE id=?').run(req.body.open ? 1 : 0, req.params.id);
   res.json({ ok: true });
+});
+app.post('/api/admin/events/:id', adminOnly, (req, res) => {
+  const title = String(req.body.title || '').trim();
+  const startsAt = new Date(req.body.starts_at);
+  if (!title || Number.isNaN(startsAt.getTime())) return res.status(400).json({ error: 'Укажите название и дату мероприятия' });
+  const result = db.prepare('UPDATE events SET title=?, starts_at=?, description=?, venue=?, chat_url=? WHERE id=?')
+    .run(title, startsAt.toISOString(), telegramHtml(req.body.description || '') || null, String(req.body.venue || '').trim() || null, String(req.body.chat_url || '').trim() || null, req.params.id);
+  if (!result.changes) return res.sendStatus(404);
+  res.json({ ok: true });
+});
+app.post('/api/admin/events/:id/images', adminOnly, upload.array('images', 9), (req, res) => {
+  const event = db.prepare('SELECT id FROM events WHERE id=?').get(req.params.id);
+  const files = req.files || [];
+  if (!event) return res.sendStatus(404);
+  if (files.some(file => !file.mimetype.startsWith('image/'))) return res.status(400).json({ error: 'Можно загрузить только изображения' });
+  const currentCount = db.prepare('SELECT COUNT(*) AS count FROM event_images WHERE event_id=?').get(event.id).count;
+  if (currentCount + files.length > 9) return res.status(400).json({ error: 'В карточке может быть не больше 9 изображений' });
+  const position = db.prepare('SELECT COALESCE(MAX(position), -1) AS max FROM event_images WHERE event_id=?').get(event.id).max;
+  const insert = db.prepare('INSERT INTO event_images (event_id,original_name,stored_name,position) VALUES (?,?,?,?)');
+  const images = files.map((file, index) => ({ id: Number(insert.run(event.id, file.originalname, file.filename, position + index + 1).lastInsertRowid) }));
+  res.json({ ok: true, images });
+});
+app.get('/api/admin/event-images/:id', adminOnly, (req, res) => { const image = db.prepare('SELECT * FROM event_images WHERE id=?').get(req.params.id); if (!image) return res.sendStatus(404); return res.sendFile(path.join(uploadsDir, image.stored_name)); });
+app.delete('/api/admin/event-images/:id', adminOnly, (req, res) => {
+  const image = db.prepare('SELECT * FROM event_images WHERE id=?').get(req.params.id);
+  if (!image) return res.sendStatus(404);
+  db.prepare('DELETE FROM event_images WHERE id=?').run(image.id); fs.unlink(path.join(uploadsDir, image.stored_name), () => {}); res.json({ ok: true });
+});
+app.post('/api/admin/events/:id/images/order', adminOnly, (req, res) => {
+  const ids = Array.isArray(req.body.ids) ? req.body.ids.map(Number) : [];
+  const found = db.prepare('SELECT id FROM event_images WHERE event_id=?').all(req.params.id).map(image => image.id);
+  if (ids.length !== found.length || ids.some(id => !found.includes(id)) || new Set(ids).size !== ids.length) return res.status(400).json({ error: 'Не удалось изменить порядок изображений' });
+  const update = db.prepare('UPDATE event_images SET position=? WHERE id=?'); db.transaction(() => ids.forEach((id, position) => update.run(position, id)))(); res.json({ ok: true });
 });
 app.post('/api/admin/posts', adminOnly, (req, res) => {
   const title = String(req.body.title || '').trim();

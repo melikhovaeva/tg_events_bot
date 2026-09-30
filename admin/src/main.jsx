@@ -380,6 +380,39 @@ function TextPostEditor({ event, post, messageImages, onSaved, onBack }) {
   </>;
 }
 
+const localDateTime = (value) => {
+  const date = new Date(value); const pad = (number) => String(number).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+};
+function EventEditor({ event, eventImages, onSaved, onBack }) {
+  const [title, setTitle] = useState(event.title);
+  const [startsAt, setStartsAt] = useState(localDateTime(event.starts_at));
+  const [venue, setVenue] = useState(event.venue || "");
+  const [chatUrl, setChatUrl] = useState(event.chat_url || "");
+  const [description, setDescription] = useState(event.description || "");
+  const [images, setImages] = useState(() => eventImages.map((image) => ({ id: image.id, serverId: image.id, url: `/api/admin/event-images/${image.id}` })));
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  useEffect(() => { setImages(eventImages.map((image) => ({ id: image.id, serverId: image.id, url: `/api/admin/event-images/${image.id}` }))); }, [eventImages]);
+  const save = async () => {
+    setSaving(true); setError("");
+    try {
+      await request(`/api/admin/events/${event.id}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title, starts_at: startsAt, venue, chat_url: chatUrl, description }) });
+      const originalIds = eventImages.map((image) => image.id);
+      const serverIds = images.filter((image) => image.serverId).map((image) => image.serverId);
+      await Promise.all(originalIds.filter((id) => !serverIds.includes(id)).map((id) => request(`/api/admin/event-images/${id}`, { method: "DELETE" })));
+      const newImages = images.filter((image) => image.file);
+      let added = [];
+      if (newImages.length) { const body = new FormData(); newImages.forEach((image) => body.append("images", image.file)); added = (await (await request(`/api/admin/events/${event.id}/images`, { method: "POST", body })).json()).images; }
+      let addedIndex = 0;
+      await request(`/api/admin/events/${event.id}/images/order`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids: images.map((image) => image.serverId || added[addedIndex++].id) }) });
+      await onSaved(); onBack();
+    } catch (e) { setError(e.message); }
+    finally { setSaving(false); }
+  };
+  return <><button onClick={onBack} className="mb-5 text-sm text-muted-foreground hover:text-foreground">← {event.title}</button><div><h1 className="text-3xl font-semibold tracking-tight">Редактировать мероприятие</h1><p className="mt-2 text-muted-foreground">Изменения сразу попадут в карточку регистрации в боте.</p></div><Card className="mt-7 max-w-3xl"><CardContent className="grid gap-5 p-5 sm:p-6"><label className="grid gap-1.5 text-sm font-medium">Название<Input value={title} onChange={(e) => setTitle(e.target.value)} /></label><div className="grid gap-5 sm:grid-cols-2"><label className="grid gap-1.5 text-sm font-medium">Дата и время<Input type="datetime-local" value={startsAt} onChange={(e) => setStartsAt(e.target.value)} /></label><label className="grid gap-1.5 text-sm font-medium">Место<Input value={venue} onChange={(e) => setVenue(e.target.value)} placeholder="Адрес или площадка" /></label></div><label className="grid gap-1.5 text-sm font-medium">Ссылка на чат<Input type="url" value={chatUrl} onChange={(e) => setChatUrl(e.target.value)} placeholder="https://t.me/..." /></label><label className="grid gap-1.5 text-sm font-medium">Анонс в карточке регистрации<RichTextEditor value={description} onChange={setDescription} placeholder="Расскажите, что будет на событии" /></label><div className="grid gap-1.5 text-sm font-medium">Изображения карточки<ImagePicker images={images} setImages={setImages} /></div>{error && <p className="text-sm text-destructive">{error}</p>}<div className="flex justify-end gap-2"><Button variant="outline" onClick={onBack}>Отмена</Button><Button onClick={save} disabled={saving || !title.trim() || !startsAt}>{saving ? "Сохраняем…" : "Сохранить изменения"}</Button></div></CardContent></Card></>;
+}
+
 function Checkin({ event, onBack, onCheckedIn }) {
   const input = useRef(null);
   const [code, setCode] = useState("");
@@ -484,7 +517,7 @@ function App() {
   }, []);
   useEffect(() => {
     const params = new URLSearchParams();
-    const needsEvent = ["detail", "texts", "textEditor", "checkin"].includes(page);
+    const needsEvent = ["detail", "eventEditor", "texts", "textEditor", "checkin"].includes(page);
     if (page !== "events") params.set("page", page);
     if (needsEvent && active) params.set("event", active);
     if (page === "textEditor" && activePost) params.set("text", activePost);
@@ -604,6 +637,10 @@ function App() {
                   </p>
                 </div>
                 <div className="flex gap-2">
+                  <Button variant="outline" onClick={() => setPage("eventEditor")}>
+                    <Pencil size={15} />
+                    Редактировать
+                  </Button>
                   <Button variant="outline" onClick={() => setPage("checkin")}>
                     <QrCode size={15} />
                     Чек-ин
@@ -701,6 +738,7 @@ function App() {
               <EventTexts event={event} messageImages={state.messageImages} onEdit={(key) => { setActivePost(key); setPage("textEditor"); }} />
             </>
           )}
+          {page === "eventEditor" && event && <EventEditor event={event} eventImages={state.eventImages || []} onSaved={() => load(event.id)} onBack={() => setPage("detail")} />}
           {page === "textEditor" && event && activePost && (
             <TextPostEditor
               event={event}
