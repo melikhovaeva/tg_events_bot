@@ -125,11 +125,11 @@ const defaultText = {
   reminder: 'Напоминаем: «{event}» уже завтра. Ждём вас!',
 };
 const telegramHtml = (value = '') => String(value)
-  .replace(/\r\n|\r|\n/g, '<br>')
+  .replace(/<br\s*\/?\s*>/gi, '\n')
+  .replace(/\r\n|\r/g, '\n')
   .split(/(<[^>]*>)/g)
   .map(part => {
-    if (part === '<br>' || part === '<br/>' || part === '<br />') return '<br>';
-    if (/^<\/?(div|p)>$/i.test(part)) return '<br>';
+    if (/^<\/?(div|p)>$/i.test(part)) return '\n';
     if (/^<\/(b|strong)>$/i.test(part)) return '</b>';
     if (/^<\/(i|em)>$/i.test(part)) return '</i>';
     if (/^<\/u>$/i.test(part)) return '</u>';
@@ -143,7 +143,7 @@ const telegramHtml = (value = '') => String(value)
     if (link) return `<a href="${esc(link[1])}">`;
     return esc(part);
   }).join('')
-  .replace(/(?:<br>){3,}/g, '<br><br>');
+  .replace(/\n{3,}/g, '\n\n');
 const eventText = (event, key) => telegramHtml((event[`${key}_text`] || defaultText[key]).replaceAll('{event}', event.title));
 const messageOptions = options => ({ parse_mode: 'HTML', ...options });
 const mainKeyboard = () => new Keyboard()
@@ -179,6 +179,7 @@ const adminOnly = (req, res, next) => {
 };
 
 const bot = new Bot(process.env.BOT_TOKEN || '');
+bot.catch((error) => console.error('Ошибка обработки сообщения Telegram:', error.error || error));
 bot.api.setMyCommands([
   { command: 'events', description: 'Посмотреть мероприятия' },
   { command: 'my', description: 'Мои регистрации' },
