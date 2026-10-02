@@ -556,6 +556,8 @@ function App() {
   const [dialogMessages, setDialogMessages] = useState([]);
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [selectedApplicants, setSelectedApplicants] = useState([]);
+  const [bulkNotice, setBulkNotice] = useState("");
   const [confirm, setConfirm] = useState(null);
   const [error, setError] = useState("");
   const load = async (id) => {
@@ -603,6 +605,29 @@ function App() {
     await request(`/admin/invite/${id}`, { method: "POST" });
     await load(active);
   };
+  const eligibleApplicants = state.people.filter((person) => person.telegram_id && !person.blocked && !["pending", "confirmed"].includes(person.invitation_status));
+  useEffect(() => {
+    const eligibleIds = new Set(eligibleApplicants.map((person) => person.id));
+    setSelectedApplicants((current) => current.filter((id) => eligibleIds.has(id)));
+  }, [state.people]);
+  const toggleApplicant = (id) => setSelectedApplicants((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
+  const toggleAllEligible = () => {
+    const ids = eligibleApplicants.map((person) => person.id);
+    const everySelected = ids.length > 0 && ids.every((id) => selectedApplicants.includes(id));
+    setSelectedApplicants(everySelected ? (current) => current.filter((id) => !ids.includes(id)) : (current) => [...new Set([...current, ...ids])]);
+  };
+  const bulkInvite = () => setConfirm({
+    title: `Отправить приглашение ${selectedApplicants.length} гостям?`,
+    description: 'Каждый получит текст приглашения этого мероприятия и 24 часа на ответ. Уже подтверждённые и ожидающие ответа гости будут пропущены.',
+    confirmLabel: 'Отправить приглашения',
+    action: async () => {
+      const response = await request(`/api/admin/events/${event.id}/invitations`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ applicantIds: selectedApplicants }) });
+      const result = await response.json();
+      setBulkNotice(`Приглашения отправлены: ${result.sent.length}${result.skipped.length ? `. Пропущено: ${result.skipped.length}` : ""}.`);
+      setSelectedApplicants([]);
+      await load(event.id);
+    },
+  });
   const setRegistration = async (open) => {
     await request(`/api/admin/events/${event.id}/registration`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ open }) });
     await load(event.id);
@@ -756,12 +781,14 @@ function App() {
               {!event.registration_open && <p className="mt-4 rounded-md border bg-muted/40 px-3 py-2 text-sm">Регистрация закрыта: новые гости не смогут подать заявку по ссылке.</p>}
               <Card className="mt-6">
                 <CardHeader>
-                  <CardTitle>Заявки</CardTitle>
+                  <div className="flex flex-wrap items-center justify-between gap-3"><CardTitle>Заявки</CardTitle><div className="flex items-center gap-2"><Button variant="outline" size="sm" onClick={toggleAllEligible} disabled={!eligibleApplicants.length}>{eligibleApplicants.length && eligibleApplicants.every((person) => selectedApplicants.includes(person.id)) ? "Снять выбор" : "Выбрать доступных"}</Button><Button size="sm" onClick={bulkInvite} disabled={!selectedApplicants.length}><Send size={14} />Пригласить выбранных{selectedApplicants.length ? ` (${selectedApplicants.length})` : ""}</Button></div></div>
                 </CardHeader>
+                {bulkNotice && <p className="mx-6 mb-1 rounded-md border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-800">{bulkNotice}</p>}
                 <CardContent className="overflow-x-auto">
                   <table className="w-full min-w-[620px] text-sm">
                     <thead>
                       <tr className="border-b text-left text-muted-foreground">
+                        <th className="w-10 pb-3"><input className="h-4 w-4 accent-foreground" type="checkbox" aria-label="Выбрать всех доступных гостей" checked={eligibleApplicants.length > 0 && eligibleApplicants.every((person) => selectedApplicants.includes(person.id))} onChange={toggleAllEligible} disabled={!eligibleApplicants.length} /></th>
                         <th className="pb-3">Участник</th>
                         <th className="pb-3">Telegram</th>
                         <th className="pb-3">Статус</th>
@@ -771,6 +798,7 @@ function App() {
                     <tbody>
                       {state.people.map((p) => (
                         <tr key={p.id} className="border-b last:border-0">
+                          <td className="py-3"><input className="h-4 w-4 accent-foreground" type="checkbox" aria-label={`Выбрать ${p.name}`} checked={selectedApplicants.includes(p.id)} onChange={() => toggleApplicant(p.id)} disabled={!eligibleApplicants.some((person) => person.id === p.id)} /></td>
                           <td className="py-3">
                             <b>{p.name}</b>
                             <br />

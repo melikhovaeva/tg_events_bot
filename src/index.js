@@ -527,6 +527,31 @@ app.post('/api/admin/applicants/:id/block', adminOnly, (req, res) => {
   else db.prepare('DELETE FROM blocked_users WHERE telegram_id=?').run(applicant.telegram_id);
   res.json({ ok: true });
 });
+app.post('/api/admin/events/:id/invitations', adminOnly, async (req, res) => {
+  const event = db.prepare('SELECT id FROM events WHERE id=?').get(req.params.id);
+  const ids = [...new Set((Array.isArray(req.body.applicantIds) ? req.body.applicantIds : []).map(Number).filter(Number.isInteger))];
+  if (!event) return res.sendStatus(404);
+  if (!ids.length) return res.status(400).json({ error: 'Выберите хотя бы одного гостя' });
+  if (ids.length > 500) return res.status(400).json({ error: 'За один раз можно пригласить до 500 гостей' });
+  const eligible = db.prepare(`SELECT a.id, a.telegram_id, i.status AS invitation_status,
+    EXISTS(SELECT 1 FROM blocked_users b WHERE b.telegram_id=a.telegram_id) AS blocked
+    FROM applicants a LEFT JOIN invitations i ON i.applicant_id=a.id WHERE a.event_id=? AND a.id=?`);
+  const sent = [];
+  const skipped = [];
+  for (const id of ids) {
+    const person = eligible.get(event.id, id);
+    if (!person) { skipped.push({ id, reason: 'заявка не найдена' }); continue; }
+    if (!person.telegram_id) { skipped.push({ id, reason: 'гость не запустил бота' }); continue; }
+    if (person.blocked) { skipped.push({ id, reason: 'доступ к боту ограничен' }); continue; }
+    if (['pending', 'confirmed'].includes(person.invitation_status)) { skipped.push({ id, reason: 'приглашение уже активно' }); continue; }
+    try {
+      await sendInvite(id);
+      sent.push(id);
+      if (sent.length < ids.length) await new Promise(resolve => setTimeout(resolve, 60));
+    } catch (error) { skipped.push({ id, reason: error.message }); }
+  }
+  res.json({ ok: true, sent, skipped });
+});
 app.delete('/api/admin/events/:id', adminOnly, (req, res) => {
   const event = db.prepare('SELECT * FROM events WHERE id=?').get(req.params.id);
   if (!event) return res.sendStatus(404);
