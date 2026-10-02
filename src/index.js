@@ -199,16 +199,26 @@ async function continueStart(ctx, claim) {
     const event = db.prepare('SELECT * FROM events WHERE id=?').get(eventMatch[1]);
     if (!event) return ctx.reply('Это мероприятие не найдено или уже недоступно.');
     const date = new Date(event.starts_at).toLocaleString('ru-RU', { dateStyle: 'long', timeStyle: 'short' });
-    const details = [event.registration_text || event.description, event.venue && `📍 ${event.venue}`, `🗓 ${date}`].filter(Boolean).join('\n\n');
+    const details = [event.registration_text || event.description, event.venue && `📍 ${event.venue}`, `🗓 ${date}`, event.registration_open ? 'Регистрация открыта' : 'Регистрация закрыта'].filter(Boolean).join('\n\n');
     const existing = db.prepare('SELECT status FROM applicants WHERE event_id=? AND telegram_id=?').get(event.id, String(ctx.from.id));
     if (existing && existing.status !== 'cancelled') return ctx.reply(`Вы уже подали заявку на «${event.title}». Сейчас: ${userStatus[existing.status] || existing.status}.`, { reply_markup: mainKeyboard() });
-    if (!event.registration_open) return ctx.reply(`Регистрация на «${event.title}» закрыта. Следите за следующими мероприятиями.`);
-    const keyboard = new InlineKeyboard().text('Подать заявку', `apply:${event.id}`);
+    const keyboard = event.registration_open ? new InlineKeyboard().text('Подать заявку', `apply:${event.id}`) : undefined;
     const images = db.prepare('SELECT * FROM event_images WHERE event_id=? ORDER BY position').all(event.id);
-    if (images.length) await bot.api.sendMediaGroup(ctx.chat.id, images.map((image, index) => ({ type: 'photo', media: new InputFile(path.join(uploadsDir, image.stored_name), image.original_name), caption: index === 0 ? `«${event.title}»` : undefined })));
-    else if (event.cover_stored_name) await ctx.replyWithPhoto(new InputFile(path.join(uploadsDir, event.cover_stored_name), event.cover_original_name || 'cover'), { caption: `«${event.title}»` });
+    const cardText = `«${esc(event.title)}»\n\n${telegramHtml(details)}`;
+    const options = messageOptions(keyboard ? { reply_markup: keyboard } : undefined);
+    if (images.length === 1 && cardText.length <= 1024) {
+      await ctx.replyWithPhoto(new InputFile(path.join(uploadsDir, images[0].stored_name), images[0].original_name), { caption: cardText, ...options });
+      await sendMessageImages(ctx.chat.id, event.id, 'registration');
+      return;
+    }
+    if (images.length > 1) await bot.api.sendMediaGroup(ctx.chat.id, images.map(image => ({ type: 'photo', media: new InputFile(path.join(uploadsDir, image.stored_name), image.original_name) })));
+    else if (event.cover_stored_name && cardText.length <= 1024) {
+      await ctx.replyWithPhoto(new InputFile(path.join(uploadsDir, event.cover_stored_name), event.cover_original_name || 'cover'), { caption: cardText, ...options });
+      await sendMessageImages(ctx.chat.id, event.id, 'registration');
+      return;
+    }
     await sendMessageImages(ctx.chat.id, event.id, 'registration');
-    return ctx.reply(`«${esc(event.title)}»\n\n${telegramHtml(details)}`, messageOptions({ reply_markup: keyboard }));
+    return ctx.reply(cardText, options);
   }
   if (!claim) return ctx.reply('Добро пожаловать! Здесь можно посмотреть мероприятия, следить за своими заявками и написать организаторам.', { reply_markup: mainKeyboard() });
   const applicant = db.prepare('SELECT * FROM applicants WHERE claim_token = ?').get(claim);
@@ -316,12 +326,12 @@ bot.on('message:text', async ctx => {
 });
 
 async function showEvents(ctx) {
-  const events = db.prepare("SELECT * FROM events WHERE registration_open=1 ORDER BY starts_at DESC").all();
-  if (!events.length) return ctx.reply('Сейчас нет мероприятий с открытой регистрацией. Следите за анонсами Perasperadastra.', { reply_markup: mainKeyboard() });
+  const events = db.prepare("SELECT * FROM events WHERE starts_at >= ? ORDER BY starts_at").all(nowIso());
+  if (!events.length) return ctx.reply('Ближайших мероприятий пока нет. Следите за анонсами Perasperadastra.', { reply_markup: mainKeyboard() });
   if (events.length === 1) return continueStart(ctx, `event_${events[0].id}`);
   const keyboard = new InlineKeyboard();
-  events.forEach(event => keyboard.text(event.title, `event:${event.id}`).row());
-  return ctx.reply('Выберите мероприятие, чтобы посмотреть детали и подать заявку.', { reply_markup: keyboard });
+  events.forEach(event => keyboard.text(`${event.title}${event.registration_open ? '' : ' · регистрация закрыта'}`, `event:${event.id}`).row());
+  return ctx.reply('Выберите мероприятие, чтобы посмотреть детали.', { reply_markup: keyboard });
 }
 async function showMyApplications(ctx) {
   const applications = db.prepare(`SELECT a.*, e.title, e.starts_at, i.status AS invitation_status
