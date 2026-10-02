@@ -66,6 +66,7 @@ const statusNames = {
   confirmed: "Подтвердил",
   declined: "Отказался",
   expired: "Не ответил за 24 часа",
+  cancelled: "Отменил регистрацию",
 };
 const fmt = (value) =>
   new Date(value).toLocaleString("ru-RU", {

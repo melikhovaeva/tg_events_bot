@@ -83,6 +83,9 @@ CREATE TABLE IF NOT EXISTS conversation_messages (
   id INTEGER PRIMARY KEY, telegram_id TEXT NOT NULL, direction TEXT NOT NULL,
   text TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS support_drafts (
+  telegram_id TEXT PRIMARY KEY, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 CREATE TABLE IF NOT EXISTS posts (
   id INTEGER PRIMARY KEY, title TEXT NOT NULL, content TEXT NOT NULL DEFAULT '',
   audience TEXT NOT NULL DEFAULT 'all', event_id INTEGER REFERENCES events(id),
@@ -143,6 +146,14 @@ const telegramHtml = (value = '') => String(value)
   .replace(/(?:<br>){3,}/g, '<br><br>');
 const eventText = (event, key) => telegramHtml((event[`${key}_text`] || defaultText[key]).replaceAll('{event}', event.title));
 const messageOptions = options => ({ parse_mode: 'HTML', ...options });
+const mainKeyboard = () => new Keyboard()
+  .text('Мероприятия').text('Мои регистрации').row()
+  .text('Написать организатору').resized().persistent();
+const userStatus = {
+  awaiting_review: 'заявка рассматривается', pending: 'ждём ответа на приглашение',
+  invited: 'ждём ответа на приглашение', confirmed: 'участие подтверждено',
+  declined: 'участие отменено', expired: 'ответ не получен', cancelled: 'регистрация отменена',
+};
 function recordConversationMessage(telegramId, telegramName, direction, text) {
   const createdAt = nowIso();
   db.prepare('INSERT INTO conversation_messages (telegram_id,direction,text,created_at) VALUES (?,?,?,?)').run(telegramId, direction, text, createdAt);
@@ -168,6 +179,11 @@ const adminOnly = (req, res, next) => {
 };
 
 const bot = new Bot(process.env.BOT_TOKEN || '');
+bot.api.setMyCommands([
+  { command: 'events', description: 'Посмотреть мероприятия' },
+  { command: 'my', description: 'Мои регистрации' },
+  { command: 'help', description: 'Помощь' },
+]).catch(console.error);
 bot.use(async (ctx, next) => {
   const telegramId = ctx.from?.id ? String(ctx.from.id) : null;
   if (!telegramId || !db.prepare('SELECT 1 FROM blocked_users WHERE telegram_id=?').get(telegramId)) return next();
@@ -184,7 +200,7 @@ async function continueStart(ctx, claim) {
     const date = new Date(event.starts_at).toLocaleString('ru-RU', { dateStyle: 'long', timeStyle: 'short' });
     const details = [event.registration_text || event.description, event.venue && `📍 ${event.venue}`, `🗓 ${date}`].filter(Boolean).join('\n\n');
     const existing = db.prepare('SELECT status FROM applicants WHERE event_id=? AND telegram_id=?').get(event.id, String(ctx.from.id));
-    if (existing) return ctx.reply(`Вы уже подали заявку на «${event.title}». Статус: ${existing.status}. Решение придёт в этот бот.`);
+    if (existing && existing.status !== 'cancelled') return ctx.reply(`Вы уже подали заявку на «${event.title}». Сейчас: ${userStatus[existing.status] || existing.status}.`, { reply_markup: mainKeyboard() });
     if (!event.registration_open) return ctx.reply(`Регистрация на «${event.title}» закрыта. Следите за следующими мероприятиями.`);
     const keyboard = new InlineKeyboard().text('Подать заявку', `apply:${event.id}`);
     const images = db.prepare('SELECT * FROM event_images WHERE event_id=? ORDER BY position').all(event.id);
@@ -193,7 +209,7 @@ async function continueStart(ctx, claim) {
     await sendMessageImages(ctx.chat.id, event.id, 'registration');
     return ctx.reply(`«${esc(event.title)}»<br><br>${telegramHtml(details)}`, messageOptions({ reply_markup: keyboard }));
   }
-  if (!claim) return ctx.reply('Добро пожаловать! Откройте ссылку на мероприятие, чтобы подать заявку.');
+  if (!claim) return ctx.reply('Добро пожаловать! Здесь можно посмотреть мероприятия, следить за своими заявками и написать организаторам.', { reply_markup: mainKeyboard() });
   const applicant = db.prepare('SELECT * FROM applicants WHERE claim_token = ?').get(claim);
   if (!applicant) return ctx.reply('Эта ссылка недействительна или устарела. Свяжитесь с организаторами.');
   if (applicant.telegram_id && applicant.telegram_id !== String(ctx.from.id)) return ctx.reply('Эта ссылка уже привязана к другому Telegram-аккаунту.');
@@ -232,8 +248,16 @@ bot.callbackQuery(/^apply:(\d+)$/, async ctx => {
   if (!event) return ctx.answerCallbackQuery({ text: 'Мероприятие не найдено.', show_alert: true });
   if (!event.registration_open) return ctx.answerCallbackQuery({ text: 'Регистрация на это мероприятие закрыта.', show_alert: true });
   const telegramId = String(ctx.from.id);
-  if (db.prepare('SELECT 1 FROM applicants WHERE event_id=? AND telegram_id=?').get(event.id, telegramId)) {
+  const existing = db.prepare('SELECT * FROM applicants WHERE event_id=? AND telegram_id=?').get(event.id, telegramId);
+  if (existing && existing.status !== 'cancelled') {
     return ctx.answerCallbackQuery({ text: 'Заявка уже подана.', show_alert: true });
+  }
+  if (existing) {
+    db.transaction(() => {
+      db.prepare('DELETE FROM invitation_attempts WHERE applicant_id=?').run(existing.id);
+      db.prepare('DELETE FROM invitations WHERE applicant_id=?').run(existing.id);
+      db.prepare("UPDATE applicants SET status='awaiting_review', phone=NULL WHERE id=?").run(existing.id);
+    })();
   }
   db.prepare(`INSERT INTO application_drafts (telegram_id,event_id,stage) VALUES (?,?,'name')
     ON CONFLICT(telegram_id,event_id) DO UPDATE SET stage='name', name=NULL`).run(telegramId, event.id);
@@ -246,18 +270,38 @@ bot.on('message:contact', async ctx => {
   const draft = db.prepare("SELECT * FROM application_drafts WHERE telegram_id=? AND stage='phone'").get(telegramId);
   if (!draft || ctx.message.contact.user_id !== ctx.from.id) return;
   const name = draft.name;
-  db.prepare('INSERT INTO applicants (event_id,name,phone,claim_token,telegram_id,telegram_name,status) VALUES (?,?,?,?,?,?,?)')
+  const existing = db.prepare('SELECT id FROM applicants WHERE event_id=? AND telegram_id=?').get(draft.event_id, telegramId);
+  if (existing) db.prepare("UPDATE applicants SET name=?,phone=?,claim_token=?,telegram_name=?,status='awaiting_review' WHERE id=?")
+    .run(name, ctx.message.contact.phone_number, token(), ctx.from.username || null, existing.id);
+  else db.prepare('INSERT INTO applicants (event_id,name,phone,claim_token,telegram_id,telegram_name,status) VALUES (?,?,?,?,?,?,?)')
     .run(draft.event_id, name, ctx.message.contact.phone_number, token(), telegramId, ctx.from.username || null, 'awaiting_review');
   db.prepare('DELETE FROM application_drafts WHERE telegram_id=? AND event_id=?').run(telegramId, draft.event_id);
   const event = db.prepare('SELECT * FROM events WHERE id=?').get(draft.event_id);
-  await ctx.reply(eventText(event, 'received'), messageOptions({ reply_markup: { remove_keyboard: true } }));
+  await ctx.reply(eventText(event, 'received'), messageOptions({ reply_markup: mainKeyboard() }));
 });
 
 bot.on('message:text', async ctx => {
   const telegramId = String(ctx.from.id);
   const draft = db.prepare('SELECT * FROM application_drafts WHERE telegram_id=?').get(telegramId);
   if (!draft) {
-    if (!ctx.message.text.startsWith('/')) recordConversationMessage(telegramId, ctx.from.username, 'in', ctx.message.text.trim());
+    const text = ctx.message.text.trim();
+    if (/^\/events(?:@\w+)?$/i.test(text)) return showEvents(ctx);
+    if (/^\/my(?:@\w+)?$/i.test(text)) return showMyApplications(ctx);
+    if (/^\/help(?:@\w+)?$/i.test(text)) return ctx.reply('Используйте кнопки ниже: можно посмотреть мероприятия, свои регистрации или написать организаторам.', { reply_markup: mainKeyboard() });
+    if (text === 'Мероприятия') return showEvents(ctx);
+    if (text === 'Мои регистрации') return showMyApplications(ctx);
+    if (text === 'Написать организатору') {
+      db.prepare('INSERT OR REPLACE INTO support_drafts (telegram_id,created_at) VALUES (?,?)').run(telegramId, nowIso());
+      return ctx.reply('Напишите сообщение — оно появится у команды Perasperadastra в диалогах.', { reply_markup: mainKeyboard() });
+    }
+    if (!text.startsWith('/')) {
+      const support = db.prepare('SELECT 1 FROM support_drafts WHERE telegram_id=?').get(telegramId);
+      recordConversationMessage(telegramId, ctx.from.username, 'in', text);
+      if (support) {
+        db.prepare('DELETE FROM support_drafts WHERE telegram_id=?').run(telegramId);
+        return ctx.reply('Спасибо, сообщение передано команде. Ответ придёт сюда.', { reply_markup: mainKeyboard() });
+      }
+    }
     return;
   }
   const text = ctx.message.text.trim();
@@ -268,6 +312,44 @@ bot.on('message:text', async ctx => {
     return ctx.reply('Теперь отправьте номер телефона кнопкой ниже. Это обязательное поле для регистрации.', { reply_markup: keyboard });
   }
   if (draft.stage === 'phone') return ctx.reply('Для завершения регистрации нажмите «Отправить мой номер».');
+});
+
+async function showEvents(ctx) {
+  const events = db.prepare("SELECT * FROM events WHERE registration_open=1 AND starts_at >= ? ORDER BY starts_at").all(nowIso());
+  if (!events.length) return ctx.reply('Сейчас нет мероприятий с открытой регистрацией. Следите за анонсами Perasperadastra.', { reply_markup: mainKeyboard() });
+  const keyboard = new InlineKeyboard();
+  events.forEach(event => keyboard.text(event.title, `event:${event.id}`).row());
+  return ctx.reply('Выберите мероприятие, чтобы посмотреть детали и подать заявку.', { reply_markup: keyboard });
+}
+async function showMyApplications(ctx) {
+  const applications = db.prepare(`SELECT a.*, e.title, e.starts_at, i.status AS invitation_status
+    FROM applicants a JOIN events e ON e.id=a.event_id LEFT JOIN invitations i ON i.applicant_id=a.id
+    WHERE a.telegram_id=? ORDER BY e.starts_at DESC`).all(String(ctx.from.id));
+  if (!applications.length) return ctx.reply('У вас пока нет регистраций. Откройте «Мероприятия», чтобы выбрать событие.', { reply_markup: mainKeyboard() });
+  for (const application of applications) {
+    const status = application.invitation_status || application.status;
+    const date = new Date(application.starts_at).toLocaleString('ru-RU', { dateStyle: 'medium', timeStyle: 'short' });
+    const keyboard = application.status === 'cancelled' ? undefined : new InlineKeyboard().text('Отменить регистрацию', `withdraw:${application.id}`);
+    await ctx.reply(`«${application.title}»\n${date}\nСтатус: ${userStatus[status] || status}`, { reply_markup: keyboard });
+  }
+}
+bot.callbackQuery(/^event:(\d+)$/, async ctx => {
+  await ctx.answerCallbackQuery();
+  return continueStart(ctx, `event_${ctx.match[1]}`);
+});
+bot.callbackQuery(/^withdraw:(\d+)$/, async ctx => {
+  const row = db.prepare('SELECT * FROM applicants WHERE id=? AND telegram_id=?').get(ctx.match[1], String(ctx.from.id));
+  if (!row || row.status === 'cancelled') return ctx.answerCallbackQuery({ text: 'Регистрация уже отменена.', show_alert: true });
+  const invitation = db.prepare('SELECT * FROM invitations WHERE applicant_id=?').get(row.id);
+  db.transaction(() => {
+    db.prepare("UPDATE applicants SET status='cancelled' WHERE id=?").run(row.id);
+    if (invitation) {
+      db.prepare("UPDATE invitations SET status='declined',responded_at=? WHERE id=?").run(nowIso(), invitation.id);
+      updateInviteAttempt(invitation.id, 'declined', true);
+    }
+  })();
+  await ctx.answerCallbackQuery({ text: 'Регистрация отменена' });
+  return ctx.editMessageText('Регистрация отменена. Если планы изменятся, вы сможете снова подать заявку по ссылке на мероприятие.');
 });
 
 bot.callbackQuery(/^answer:(yes|no):(\d+)$/, async ctx => {
