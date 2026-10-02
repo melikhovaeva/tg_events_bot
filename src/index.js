@@ -247,7 +247,7 @@ bot.callbackQuery(/^apply:(\d+)$/, async ctx => {
     .run(profile.name, profile.phone, token(), ctx.from.username || null, existing.id);
   else db.prepare('INSERT INTO applicants (event_id,name,phone,claim_token,telegram_id,telegram_name,status) VALUES (?,?,?,?,?,?,?)')
     .run(event.id, profile.name, profile.phone, token(), telegramId, ctx.from.username || null, 'awaiting_review');
-  await ctx.answerCallbackQuery({ text: 'Заявка отправлена' });
+  await ctx.answerCallbackQuery({ text: 'Регистрация принята' });
   return editApplicationMessage(ctx, eventText(event, 'received'));
 });
 
@@ -340,7 +340,7 @@ async function showMyApplications(ctx) {
   }
 }
 bot.callbackQuery(/^event:(\d+)$/, async ctx => {
-  await ctx.answerCallbackQuery();
+  await ctx.answerCallbackQuery({ text: answer === 'yes' ? 'Участие подтверждено' : 'Отказ сохранён' });
   return continueStart(ctx, `event_${ctx.match[1]}`);
 });
 bot.callbackQuery(/^withdraw:(\d+)$/, async ctx => {
@@ -364,7 +364,7 @@ bot.callbackQuery(/^answer:(yes|no):(\d+)$/, async ctx => {
     FROM invitations i JOIN applicants a ON a.id=i.applicant_id JOIN events e ON e.id=a.event_id WHERE i.id=?`).get(id);
   if (!row || row.telegram_id !== String(ctx.from.id)) return ctx.answerCallbackQuery({ text: 'Приглашение не найдено.', show_alert: true });
   if (row.status !== 'pending' || new Date(row.expires_at) <= new Date()) return ctx.answerCallbackQuery({ text: 'Срок ответа уже закончился.', show_alert: true });
-  await ctx.answerCallbackQuery();
+  await ctx.answerCallbackQuery({ text: answer === 'yes' ? 'Участие подтверждено' : 'Отказ сохранён' });
   if (answer === 'no') {
     db.prepare("UPDATE invitations SET status='declined', responded_at=? WHERE id=?").run(nowIso(), id);
     updateInviteAttempt(id, 'declined', true);
@@ -387,19 +387,21 @@ bot.callbackQuery(/^answer:(yes|no):(\d+)$/, async ctx => {
 bot.callbackQuery(/^cancel:(\d+)$/, async ctx => {
   const row = db.prepare(`SELECT i.*, a.telegram_id, a.id applicant_id, e.id event_id, e.title, e.declined_text FROM invitations i JOIN applicants a ON a.id=i.applicant_id JOIN events e ON e.id=a.event_id WHERE i.id=?`).get(ctx.match[1]);
   if (!row || row.telegram_id !== String(ctx.from.id) || row.status !== 'confirmed') return ctx.answerCallbackQuery({ text: 'Это участие уже нельзя отменить.', show_alert: true });
+  await ctx.answerCallbackQuery({ text: 'Участие отменено' });
   db.prepare("UPDATE invitations SET status='declined', responded_at=? WHERE id=?").run(nowIso(), row.id);
   updateInviteAttempt(row.id, 'declined', true);
   db.prepare("UPDATE applicants SET status='declined' WHERE id=?").run(row.applicant_id);
   await ctx.editMessageText(eventText(row, 'declined'), messageOptions()); await sendMessageImages(row.telegram_id, row.event_id, 'declined');
-  return ctx.answerCallbackQuery();
+  return;
 });
 bot.callbackQuery(/^final:(yes|no):(\d+)$/, async ctx => {
   const [, answer, id] = ctx.match;
   const row = db.prepare('SELECT i.*, a.telegram_id, a.id applicant_id, e.id event_id, e.declined_text, e.title FROM invitations i JOIN applicants a ON a.id=i.applicant_id JOIN events e ON e.id=a.event_id WHERE i.id=?').get(id);
   if (!row || row.telegram_id !== String(ctx.from.id) || row.status !== 'confirmed') return ctx.answerCallbackQuery({ text: 'Приглашение не найдено.', show_alert: true });
-  if (answer === 'no') { db.prepare("UPDATE invitations SET status='declined', responded_at=? WHERE id=?").run(nowIso(), id); updateInviteAttempt(id, 'declined', true); db.prepare("UPDATE applicants SET status='declined' WHERE id=?").run(row.applicant_id); await ctx.editMessageText(eventText(row, 'declined'), messageOptions()); await sendMessageImages(row.telegram_id, row.event_id, 'declined'); return ctx.answerCallbackQuery(); }
+  await ctx.answerCallbackQuery({ text: answer === 'yes' ? 'Подтверждение сохранено' : 'Участие отменено' });
+  if (answer === 'no') { db.prepare("UPDATE invitations SET status='declined', responded_at=? WHERE id=?").run(nowIso(), id); updateInviteAttempt(id, 'declined', true); db.prepare("UPDATE applicants SET status='declined' WHERE id=?").run(row.applicant_id); await ctx.editMessageText(eventText(row, 'declined'), messageOptions()); await sendMessageImages(row.telegram_id, row.event_id, 'declined'); return; }
   db.prepare('UPDATE invitations SET final_confirmed_at=? WHERE id=?').run(nowIso(), id);
-  await ctx.editMessageText('Спасибо, ждём вас на мероприятии!'); return ctx.answerCallbackQuery();
+  await ctx.editMessageText('Спасибо, ждём вас на мероприятии!'); return;
 });
 
 const app = express();
