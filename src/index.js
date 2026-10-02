@@ -46,6 +46,10 @@ CREATE TABLE IF NOT EXISTS invitations (
   final_confirmed_at TEXT,
   checked_in_at TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS invitation_attempts (
+  id INTEGER PRIMARY KEY, applicant_id INTEGER NOT NULL REFERENCES applicants(id), invitation_id INTEGER NOT NULL REFERENCES invitations(id),
+  status TEXT NOT NULL DEFAULT 'pending', sent_at TEXT NOT NULL, expires_at TEXT NOT NULL, responded_at TEXT
+);
 CREATE TABLE IF NOT EXISTS application_drafts (
   telegram_id TEXT NOT NULL, event_id INTEGER NOT NULL REFERENCES events(id),
   stage TEXT NOT NULL, name TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -67,6 +71,9 @@ CREATE TABLE IF NOT EXISTS event_message_images (
 CREATE TABLE IF NOT EXISTS telegram_consents (
   telegram_id TEXT PRIMARY KEY, telegram_name TEXT, accepted_at TEXT NOT NULL,
   policy_url TEXT NOT NULL, agreement_url TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS blocked_users (
+  telegram_id TEXT PRIMARY KEY, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS posts (
   id INTEGER PRIMARY KEY, title TEXT NOT NULL, content TEXT NOT NULL DEFAULT '',
@@ -145,6 +152,14 @@ const adminOnly = (req, res, next) => {
 };
 
 const bot = new Bot(process.env.BOT_TOKEN || '');
+bot.use(async (ctx, next) => {
+  const telegramId = ctx.from?.id ? String(ctx.from.id) : null;
+  if (!telegramId || !db.prepare('SELECT 1 FROM blocked_users WHERE telegram_id=?').get(telegramId)) return next();
+  if (ctx.callbackQuery) await ctx.answerCallbackQuery({ text: 'Доступ к боту ограничен.', show_alert: true });
+  else if (ctx.chat) await ctx.reply('Доступ к этому боту ограничен.');
+});
+const updateInviteAttempt = (invitationId, status, responded = false) => db.prepare(`UPDATE invitation_attempts SET status=?, responded_at=?
+  WHERE id=(SELECT id FROM invitation_attempts WHERE invitation_id=? ORDER BY id DESC LIMIT 1)`).run(status, responded ? nowIso() : null, invitationId);
 async function continueStart(ctx, claim) {
   const eventMatch = claim?.match(/^event_(\d+)$/);
   if (eventMatch) {
@@ -244,11 +259,13 @@ bot.callbackQuery(/^answer:(yes|no):(\d+)$/, async ctx => {
   if (row.status !== 'pending' || new Date(row.expires_at) <= new Date()) return ctx.answerCallbackQuery({ text: 'Срок ответа уже закончился.', show_alert: true });
   if (answer === 'no') {
     db.prepare("UPDATE invitations SET status='declined', responded_at=? WHERE id=?").run(nowIso(), id);
+    updateInviteAttempt(id, 'declined', true);
     db.prepare("UPDATE applicants SET status='declined' WHERE id=?").run(row.applicant_id);
     await ctx.editMessageText(eventText(row, 'declined'), messageOptions()); await sendMessageImages(row.telegram_id, row.event_id, 'declined');
   } else {
     const checkinToken = token();
     db.prepare("UPDATE invitations SET status='confirmed', responded_at=?, checkin_token=? WHERE id=?").run(nowIso(), checkinToken, id);
+    updateInviteAttempt(id, 'confirmed', true);
     db.prepare("UPDATE applicants SET status='confirmed' WHERE id=?").run(row.applicant_id);
     const qr = await QRCode.toBuffer(checkinToken, { width: 700, margin: 2 });
     await ctx.editMessageText(eventText(row, 'confirmed'), messageOptions({ reply_markup: new InlineKeyboard().text('Не смогу прийти', `cancel:${id}`) })); await sendMessageImages(row.telegram_id, row.event_id, 'confirmed');
@@ -263,6 +280,7 @@ bot.callbackQuery(/^cancel:(\d+)$/, async ctx => {
   const row = db.prepare(`SELECT i.*, a.telegram_id, a.id applicant_id, e.id event_id, e.title, e.declined_text FROM invitations i JOIN applicants a ON a.id=i.applicant_id JOIN events e ON e.id=a.event_id WHERE i.id=?`).get(ctx.match[1]);
   if (!row || row.telegram_id !== String(ctx.from.id) || row.status !== 'confirmed') return ctx.answerCallbackQuery({ text: 'Это участие уже нельзя отменить.', show_alert: true });
   db.prepare("UPDATE invitations SET status='declined', responded_at=? WHERE id=?").run(nowIso(), row.id);
+  updateInviteAttempt(row.id, 'declined', true);
   db.prepare("UPDATE applicants SET status='declined' WHERE id=?").run(row.applicant_id);
   await ctx.editMessageText(eventText(row, 'declined'), messageOptions()); await sendMessageImages(row.telegram_id, row.event_id, 'declined');
   return ctx.answerCallbackQuery();
@@ -271,7 +289,7 @@ bot.callbackQuery(/^final:(yes|no):(\d+)$/, async ctx => {
   const [, answer, id] = ctx.match;
   const row = db.prepare('SELECT i.*, a.telegram_id, a.id applicant_id, e.id event_id, e.declined_text, e.title FROM invitations i JOIN applicants a ON a.id=i.applicant_id JOIN events e ON e.id=a.event_id WHERE i.id=?').get(id);
   if (!row || row.telegram_id !== String(ctx.from.id) || row.status !== 'confirmed') return ctx.answerCallbackQuery({ text: 'Приглашение не найдено.', show_alert: true });
-  if (answer === 'no') { db.prepare("UPDATE invitations SET status='declined', responded_at=? WHERE id=?").run(nowIso(), id); db.prepare("UPDATE applicants SET status='declined' WHERE id=?").run(row.applicant_id); await ctx.editMessageText(eventText(row, 'declined'), messageOptions()); await sendMessageImages(row.telegram_id, row.event_id, 'declined'); return ctx.answerCallbackQuery(); }
+  if (answer === 'no') { db.prepare("UPDATE invitations SET status='declined', responded_at=? WHERE id=?").run(nowIso(), id); updateInviteAttempt(id, 'declined', true); db.prepare("UPDATE applicants SET status='declined' WHERE id=?").run(row.applicant_id); await ctx.editMessageText(eventText(row, 'declined'), messageOptions()); await sendMessageImages(row.telegram_id, row.event_id, 'declined'); return ctx.answerCallbackQuery(); }
   db.prepare('UPDATE invitations SET final_confirmed_at=? WHERE id=?').run(nowIso(), id);
   await ctx.editMessageText('Спасибо, ждём вас на мероприятии!'); return ctx.answerCallbackQuery();
 });
@@ -279,6 +297,7 @@ bot.callbackQuery(/^final:(yes|no):(\d+)$/, async ctx => {
 async function sendInvite(applicantId) {
   const row = db.prepare('SELECT a.*, e.* FROM applicants a JOIN events e ON e.id=a.event_id WHERE a.id=?').get(applicantId);
   if (!row?.telegram_id) throw new Error('Участник ещё не запустил бота по персональной ссылке');
+  if (db.prepare('SELECT 1 FROM blocked_users WHERE telegram_id=?').get(row.telegram_id)) throw new Error('Доступ гостя к боту ограничен');
   const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
   let invitation = db.prepare('SELECT * FROM invitations WHERE applicant_id=?').get(applicantId);
   if (invitation?.status === 'confirmed') throw new Error('Участие уже подтверждено');
@@ -287,6 +306,7 @@ async function sendInvite(applicantId) {
     const r = db.prepare("INSERT INTO invitations (applicant_id,status,expires_at) VALUES (?, 'pending', ?)").run(applicantId, expiresAt);
     invitation = { id: r.lastInsertRowid };
   }
+  db.prepare("INSERT INTO invitation_attempts (applicant_id,invitation_id,status,sent_at,expires_at) VALUES (?,?,'pending',?,?)").run(applicantId, invitation.id, nowIso(), expiresAt);
   db.prepare("UPDATE applicants SET status='invited' WHERE id=?").run(applicantId);
   const keyboard = new InlineKeyboard().text('Подтверждаю участие', `answer:yes:${invitation.id}`).text('Не смогу прийти', `answer:no:${invitation.id}`);
   await bot.api.sendMessage(row.telegram_id, eventText(row, 'invite'), messageOptions({ reply_markup: keyboard })); await sendMessageImages(row.telegram_id, row.event_id, 'invite');
@@ -296,6 +316,7 @@ async function runAutomation() {
   const expired = db.prepare("SELECT i.*, a.telegram_id, a.id applicant_id, e.id AS event_id, e.title, e.expired_text FROM invitations i JOIN applicants a ON a.id=i.applicant_id JOIN events e ON e.id=a.event_id WHERE i.status='pending' AND i.expires_at <= ?").all(nowIso());
   for (const row of expired) {
     db.prepare("UPDATE invitations SET status='expired' WHERE id=?").run(row.id);
+    updateInviteAttempt(row.id, 'expired');
     db.prepare("UPDATE applicants SET status='expired' WHERE id=?").run(row.applicant_id);
     if (row.telegram_id) { await bot.api.sendMessage(row.telegram_id, eventText(row, 'expired'), messageOptions()).catch(console.error); await sendMessageImages(row.telegram_id, row.event_id, 'expired'); }
   }
@@ -332,7 +353,9 @@ app.get('/api/admin/state', adminOnly, (req, res) => {
     FROM events e LEFT JOIN applicants a ON a.event_id=e.id LEFT JOIN invitations i ON i.applicant_id=a.id
     GROUP BY e.id ORDER BY e.starts_at DESC`).all();
   const selected = Number(req.query.event || events[0]?.id);
-  const people = selected ? db.prepare(`SELECT a.*, i.id invitation_id, i.status invitation_status, i.expires_at, i.checked_in_at
+  const people = selected ? db.prepare(`SELECT a.*, i.id invitation_id, i.status invitation_status, i.expires_at, i.checked_in_at,
+    EXISTS(SELECT 1 FROM blocked_users b WHERE b.telegram_id=a.telegram_id) AS blocked,
+    (SELECT ia.status FROM invitation_attempts ia WHERE ia.applicant_id=a.id AND ia.status!='pending' ORDER BY ia.id DESC LIMIT 1) AS previous_invitation_status
     FROM applicants a LEFT JOIN invitations i ON i.applicant_id=a.id WHERE a.event_id=? ORDER BY a.created_at DESC`).all(selected) : [];
   const assets = selected ? db.prepare('SELECT * FROM event_assets WHERE event_id=? ORDER BY created_at DESC').all(selected) : [];
   const guests = db.prepare(`SELECT a.telegram_id, a.telegram_name, a.name, a.phone, MAX(a.created_at) AS last_seen,
@@ -382,6 +405,48 @@ app.post('/api/admin/events/:id/texts', adminOnly, (req, res) => {
 });
 app.post('/api/admin/events/:id/registration', adminOnly, (req, res) => {
   db.prepare('UPDATE events SET registration_open=? WHERE id=?').run(req.body.open ? 1 : 0, req.params.id);
+  res.json({ ok: true });
+});
+app.delete('/api/admin/applicants/:id', adminOnly, (req, res) => {
+  const applicant = db.prepare('SELECT id FROM applicants WHERE id=?').get(req.params.id);
+  if (!applicant) return res.sendStatus(404);
+  db.transaction(() => {
+    db.prepare('DELETE FROM invitation_attempts WHERE applicant_id=?').run(applicant.id);
+    db.prepare('DELETE FROM invitations WHERE applicant_id=?').run(applicant.id);
+    db.prepare('DELETE FROM applicants WHERE id=?').run(applicant.id);
+  })();
+  res.json({ ok: true });
+});
+app.post('/api/admin/applicants/:id/block', adminOnly, (req, res) => {
+  const applicant = db.prepare('SELECT telegram_id FROM applicants WHERE id=?').get(req.params.id);
+  if (!applicant) return res.sendStatus(404);
+  if (!applicant.telegram_id) return res.status(400).json({ error: 'Гость ещё не подключил Telegram' });
+  if (req.body.blocked) db.prepare('INSERT OR IGNORE INTO blocked_users (telegram_id) VALUES (?)').run(applicant.telegram_id);
+  else db.prepare('DELETE FROM blocked_users WHERE telegram_id=?').run(applicant.telegram_id);
+  res.json({ ok: true });
+});
+app.delete('/api/admin/events/:id', adminOnly, (req, res) => {
+  const event = db.prepare('SELECT * FROM events WHERE id=?').get(req.params.id);
+  if (!event) return res.sendStatus(404);
+  const storedNames = [event.cover_stored_name,
+    ...db.prepare('SELECT stored_name FROM event_images WHERE event_id=?').all(event.id).map(row => row.stored_name),
+    ...db.prepare('SELECT stored_name FROM event_message_images WHERE event_id=?').all(event.id).map(row => row.stored_name),
+    ...db.prepare('SELECT stored_name FROM event_assets WHERE event_id=?').all(event.id).map(row => row.stored_name),
+  ].filter(Boolean);
+  db.transaction(() => {
+    const applicantIds = db.prepare('SELECT id FROM applicants WHERE event_id=?').all(event.id).map(row => row.id);
+    const deleteAttempts = db.prepare('DELETE FROM invitation_attempts WHERE applicant_id=?');
+    const deleteInvites = db.prepare('DELETE FROM invitations WHERE applicant_id=?');
+    applicantIds.forEach(id => { deleteAttempts.run(id); deleteInvites.run(id); });
+    db.prepare('DELETE FROM application_drafts WHERE event_id=?').run(event.id);
+    db.prepare('DELETE FROM applicants WHERE event_id=?').run(event.id);
+    db.prepare('DELETE FROM event_images WHERE event_id=?').run(event.id);
+    db.prepare('DELETE FROM event_message_images WHERE event_id=?').run(event.id);
+    db.prepare('DELETE FROM event_assets WHERE event_id=?').run(event.id);
+    db.prepare('UPDATE posts SET event_id=NULL WHERE event_id=?').run(event.id);
+    db.prepare('DELETE FROM events WHERE id=?').run(event.id);
+  })();
+  storedNames.forEach(name => fs.unlink(path.join(uploadsDir, name), () => {}));
   res.json({ ok: true });
 });
 app.post('/api/admin/events/:id', adminOnly, (req, res) => {

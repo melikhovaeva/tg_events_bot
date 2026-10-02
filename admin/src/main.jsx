@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   CalendarDays,
+  Ban,
   Bold,
   Check,
   Copy,
@@ -63,7 +64,7 @@ const statusNames = {
   pending: "Ждёт ответа",
   confirmed: "Подтвердил",
   declined: "Отказался",
-  expired: "Срок истёк",
+  expired: "Не ответил за 24 часа",
 };
 const fmt = (value) =>
   new Date(value).toLocaleString("ru-RU", {
@@ -271,6 +272,12 @@ function CreateDialog({ open, setOpen, create }) {
       </DialogContent>
     </Dialog>
   );
+}
+function ConfirmDialog({ item, onClose }) {
+  const [working, setWorking] = useState(false);
+  if (!item) return null;
+  const confirm = async () => { setWorking(true); try { await item.action(); onClose(); } finally { setWorking(false); } };
+  return <Dialog open={Boolean(item)} onOpenChange={(open) => !open && onClose()}><DialogContent className="max-w-md"><DialogHeader><DialogTitle>{item.title}</DialogTitle><DialogDescription>{item.description}</DialogDescription></DialogHeader><div className="flex justify-end gap-2"><Button variant="outline" onClick={onClose}>Отмена</Button><Button className="bg-destructive text-white hover:bg-destructive/90" onClick={confirm} disabled={working}>{working ? "Удаляем…" : item.confirmLabel || "Удалить"}</Button></div></DialogContent></Dialog>;
 }
 function Stat({ label, value }) {
   return (
@@ -501,6 +508,7 @@ function App() {
   const [activeBroadcast, setActiveBroadcast] = useState(initialBroadcast);
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [confirm, setConfirm] = useState(null);
   const [error, setError] = useState("");
   const load = async (id) => {
     try {
@@ -540,6 +548,22 @@ function App() {
     await request(`/api/admin/events/${event.id}/registration`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ open }) });
     await load(event.id);
   };
+  const removeApplicant = (person) => setConfirm({
+    title: "Удалить регистрацию?",
+    description: `${person.name} будет удалён из списка гостей этого мероприятия. Это действие нельзя отменить.`,
+    confirmLabel: "Удалить регистрацию",
+    action: async () => { await request(`/api/admin/applicants/${person.id}`, { method: "DELETE" }); await load(event.id); },
+  });
+  const toggleBlock = async (person) => {
+    await request(`/api/admin/applicants/${person.id}/block`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blocked: !person.blocked }) });
+    await load(event.id);
+  };
+  const removeEvent = () => setConfirm({
+    title: "Удалить мероприятие?",
+    description: `Будут удалены «${event.title}», все заявки, приглашения и материалы. Это действие нельзя отменить.`,
+    confirmLabel: "Удалить мероприятие",
+    action: async () => { await request(`/api/admin/events/${event.id}`, { method: "DELETE" }); await load(); setPage("events"); },
+  });
   const copy = async () => {
     await navigator.clipboard.writeText(
       `https://t.me/${state.botUsername}?start=event_${event.id}`,
@@ -652,6 +676,9 @@ function App() {
                   <Button variant="outline" className="h-9 w-9 p-0" title={event.registration_open ? "Закрыть регистрацию" : "Открыть регистрацию"} aria-label={event.registration_open ? "Закрыть регистрацию" : "Открыть регистрацию"} onClick={() => setRegistration(!event.registration_open)}>
                     {event.registration_open ? <Lock size={15} /> : <LockOpen size={15} />}
                   </Button>
+                  <Button variant="outline" className="h-9 w-9 p-0 text-destructive hover:text-destructive" title="Удалить мероприятие" aria-label="Удалить мероприятие" onClick={removeEvent}>
+                    <Trash2 size={15} />
+                  </Button>
                 </div>
               </div>
               <div className="mt-7 grid gap-4 md:grid-cols-4">
@@ -695,10 +722,12 @@ function App() {
                             {p.telegram_name ? `@${p.telegram_name}` : "—"}
                           </td>
                           <td className="py-3">
-                            {p.checked_in_at ? "Пришёл" : statusNames[p.invitation_status || p.status]}
+                            <span>{p.blocked ? "Доступ ограничен" : p.checked_in_at ? "Пришёл" : statusNames[p.invitation_status || p.status]}</span>
+                            {!p.blocked && p.invitation_status === "pending" && p.previous_invitation_status && <small className="block text-muted-foreground">Ранее: {statusNames[p.previous_invitation_status]}</small>}
                           </td>
                           <td className="py-3 text-right">
-                            {p.telegram_id &&
+                            <div className="flex justify-end gap-1">
+                            {p.telegram_id && !p.blocked &&
                               !["pending", "confirmed"].includes(
                                 p.invitation_status,
                               ) && (
@@ -707,6 +736,9 @@ function App() {
                                   Пригласить
                                 </Button>
                               )}
+                            {p.telegram_id && <Button variant="outline" size="sm" title={p.blocked ? "Вернуть доступ к боту" : "Ограничить доступ к боту"} aria-label={p.blocked ? "Вернуть доступ к боту" : "Ограничить доступ к боту"} onClick={() => toggleBlock(p)}><Ban size={14} /></Button>}
+                            <Button variant="outline" size="sm" className="text-destructive hover:text-destructive" title="Удалить регистрацию" aria-label="Удалить регистрацию" onClick={() => removeApplicant(p)}><Trash2 size={14} /></Button>
+                            </div>
                           </td>
                         </tr>
                       ))}
@@ -799,6 +831,7 @@ function App() {
           {page === "postEditor" && <PostEditor post={activeBroadcast ? state.posts.find((post) => post.id === activeBroadcast) : null} events={state.events} postImages={state.postImages || []} postFiles={state.postFiles || []} onSaved={async (id) => { setActiveBroadcast(id); await load(active); }} onBack={() => setPage("posts")} />}
       </main>
       <CreateDialog open={open} setOpen={setOpen} create={create} />
+      <ConfirmDialog item={confirm} onClose={() => setConfirm(null)} />
     </div>
   );
 }
