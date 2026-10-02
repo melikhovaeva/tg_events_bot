@@ -55,6 +55,15 @@ CREATE TABLE IF NOT EXISTS application_drafts (
   stage TEXT NOT NULL, name TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (telegram_id, event_id)
 );
+CREATE TABLE IF NOT EXISTS telegram_profiles (
+  telegram_id TEXT PRIMARY KEY, name TEXT NOT NULL, phone TEXT NOT NULL,
+  telegram_name TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS profile_drafts (
+  telegram_id TEXT PRIMARY KEY, continuation TEXT NOT NULL DEFAULT '', stage TEXT NOT NULL,
+  name TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 CREATE TABLE IF NOT EXISTS event_assets (
   id INTEGER PRIMARY KEY, event_id INTEGER NOT NULL REFERENCES events(id), original_name TEXT NOT NULL,
   stored_name TEXT NOT NULL UNIQUE, delivery_stage TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -193,7 +202,19 @@ bot.use(async (ctx, next) => {
 });
 const updateInviteAttempt = (invitationId, status, responded = false) => db.prepare(`UPDATE invitation_attempts SET status=?, responded_at=?
   WHERE id=(SELECT id FROM invitation_attempts WHERE invitation_id=? ORDER BY id DESC LIMIT 1)`).run(status, responded ? nowIso() : null, invitationId);
+async function requestProfile(ctx, continuation = '') {
+  const telegramId = String(ctx.from.id);
+  db.prepare(`INSERT INTO profile_drafts (telegram_id,continuation,stage,name) VALUES (?,?,'name',NULL)
+    ON CONFLICT(telegram_id) DO UPDATE SET continuation=excluded.continuation,stage='name',name=NULL`).run(telegramId, continuation || '');
+  return ctx.reply('Чтобы оформить регистрацию быстрее, сохраните данные один раз.\n\nНапишите ваши имя и фамилию.', { reply_markup: { remove_keyboard: true } });
+}
+async function editApplicationMessage(ctx, text) {
+  if (ctx.callbackQuery?.message?.photo) return ctx.editMessageCaption(text, messageOptions());
+  return ctx.editMessageText(text, messageOptions());
+}
 async function continueStart(ctx, claim) {
+  const profile = db.prepare('SELECT * FROM telegram_profiles WHERE telegram_id=?').get(String(ctx.from.id));
+  if (!profile) return requestProfile(ctx, claim);
   const eventMatch = claim?.match(/^event_(\d+)$/);
   if (eventMatch) {
     const event = db.prepare('SELECT * FROM events WHERE id=?').get(eventMatch[1]);
@@ -259,6 +280,11 @@ bot.callbackQuery(/^apply:(\d+)$/, async ctx => {
   if (!event) return ctx.answerCallbackQuery({ text: 'Мероприятие не найдено.', show_alert: true });
   if (!event.registration_open) return ctx.answerCallbackQuery({ text: 'Регистрация на это мероприятие закрыта.', show_alert: true });
   const telegramId = String(ctx.from.id);
+  const profile = db.prepare('SELECT * FROM telegram_profiles WHERE telegram_id=?').get(telegramId);
+  if (!profile) {
+    await ctx.answerCallbackQuery();
+    return requestProfile(ctx, `event_${event.id}`);
+  }
   const existing = db.prepare('SELECT * FROM applicants WHERE event_id=? AND telegram_id=?').get(event.id, telegramId);
   if (existing && existing.status !== 'cancelled') {
     return ctx.answerCallbackQuery({ text: 'Заявка уже подана.', show_alert: true });
@@ -267,17 +293,27 @@ bot.callbackQuery(/^apply:(\d+)$/, async ctx => {
     db.transaction(() => {
       db.prepare('DELETE FROM invitation_attempts WHERE applicant_id=?').run(existing.id);
       db.prepare('DELETE FROM invitations WHERE applicant_id=?').run(existing.id);
-      db.prepare("UPDATE applicants SET status='awaiting_review', phone=NULL WHERE id=?").run(existing.id);
+      db.prepare("UPDATE applicants SET status='awaiting_review' WHERE id=?").run(existing.id);
     })();
   }
-  db.prepare(`INSERT INTO application_drafts (telegram_id,event_id,stage) VALUES (?,?,'name')
-    ON CONFLICT(telegram_id,event_id) DO UPDATE SET stage='name', name=NULL`).run(telegramId, event.id);
-  await ctx.editMessageText(`Заявка на «${event.title}».\n\nКак к вам обращаться? Напишите имя и фамилию.`);
-  return ctx.answerCallbackQuery();
+  if (existing) db.prepare("UPDATE applicants SET name=?,phone=?,claim_token=?,telegram_name=?,status='awaiting_review' WHERE id=?")
+    .run(profile.name, profile.phone, token(), ctx.from.username || null, existing.id);
+  else db.prepare('INSERT INTO applicants (event_id,name,phone,claim_token,telegram_id,telegram_name,status) VALUES (?,?,?,?,?,?,?)')
+    .run(event.id, profile.name, profile.phone, token(), telegramId, ctx.from.username || null, 'awaiting_review');
+  await ctx.answerCallbackQuery({ text: 'Заявка отправлена' });
+  return editApplicationMessage(ctx, eventText(event, 'received'));
 });
 
 bot.on('message:contact', async ctx => {
   const telegramId = String(ctx.from.id);
+  const profileDraft = db.prepare('SELECT * FROM profile_drafts WHERE telegram_id=? AND stage=\'phone\'').get(telegramId);
+  if (profileDraft && ctx.message.contact.user_id === ctx.from.id) {
+    db.prepare(`INSERT INTO telegram_profiles (telegram_id,name,phone,telegram_name,created_at,updated_at) VALUES (?,?,?,?,?,?)
+      ON CONFLICT(telegram_id) DO UPDATE SET name=excluded.name,phone=excluded.phone,telegram_name=excluded.telegram_name,updated_at=excluded.updated_at`)
+      .run(telegramId, profileDraft.name, ctx.message.contact.phone_number, ctx.from.username || null, nowIso(), nowIso());
+    db.prepare('DELETE FROM profile_drafts WHERE telegram_id=?').run(telegramId);
+    return continueStart(ctx, profileDraft.continuation);
+  }
   const draft = db.prepare("SELECT * FROM application_drafts WHERE telegram_id=? AND stage='phone'").get(telegramId);
   if (!draft || ctx.message.contact.user_id !== ctx.from.id) return;
   const name = draft.name;
@@ -293,6 +329,17 @@ bot.on('message:contact', async ctx => {
 
 bot.on('message:text', async ctx => {
   const telegramId = String(ctx.from.id);
+  const profileDraft = db.prepare('SELECT * FROM profile_drafts WHERE telegram_id=?').get(telegramId);
+  if (profileDraft) {
+    const text = ctx.message.text.trim();
+    if (profileDraft.stage === 'name') {
+      if (text.length < 3) return ctx.reply('Напишите, пожалуйста, имя и фамилию полностью.');
+      db.prepare("UPDATE profile_drafts SET stage='phone',name=? WHERE telegram_id=?").run(text, telegramId);
+      const keyboard = new Keyboard().requestContact('📱 Отправить мой номер').resized().oneTime();
+      return ctx.reply('Теперь отправьте номер телефона кнопкой ниже. Он нужен для связи по мероприятию.', { reply_markup: keyboard });
+    }
+    return ctx.reply('Для продолжения нажмите «Отправить мой номер».');
+  }
   const draft = db.prepare('SELECT * FROM application_drafts WHERE telegram_id=?').get(telegramId);
   if (!draft) {
     const text = ctx.message.text.trim();
