@@ -75,6 +75,14 @@ CREATE TABLE IF NOT EXISTS telegram_consents (
 CREATE TABLE IF NOT EXISTS blocked_users (
   telegram_id TEXT PRIMARY KEY, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS conversations (
+  telegram_id TEXT PRIMARY KEY, telegram_name TEXT, last_message TEXT, last_message_at TEXT NOT NULL,
+  unread_count INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS conversation_messages (
+  id INTEGER PRIMARY KEY, telegram_id TEXT NOT NULL, direction TEXT NOT NULL,
+  text TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 CREATE TABLE IF NOT EXISTS posts (
   id INTEGER PRIMARY KEY, title TEXT NOT NULL, content TEXT NOT NULL DEFAULT '',
   audience TEXT NOT NULL DEFAULT 'all', event_id INTEGER REFERENCES events(id),
@@ -135,6 +143,14 @@ const telegramHtml = (value = '') => String(value)
   .replace(/(?:<br>){3,}/g, '<br><br>');
 const eventText = (event, key) => telegramHtml((event[`${key}_text`] || defaultText[key]).replaceAll('{event}', event.title));
 const messageOptions = options => ({ parse_mode: 'HTML', ...options });
+function recordConversationMessage(telegramId, telegramName, direction, text) {
+  const createdAt = nowIso();
+  db.prepare('INSERT INTO conversation_messages (telegram_id,direction,text,created_at) VALUES (?,?,?,?)').run(telegramId, direction, text, createdAt);
+  const unreadCount = direction === 'in' ? 1 : 0;
+  db.prepare(`INSERT INTO conversations (telegram_id,telegram_name,last_message,last_message_at,unread_count) VALUES (?,?,?,?,?)
+    ON CONFLICT(telegram_id) DO UPDATE SET telegram_name=excluded.telegram_name,last_message=excluded.last_message,last_message_at=excluded.last_message_at,unread_count=${direction === 'in' ? 'conversations.unread_count+1' : '0'}`)
+    .run(telegramId, telegramName || null, text, createdAt, unreadCount);
+}
 async function sendAssets(telegramId, eventId, stage) {
   const assets = db.prepare('SELECT * FROM event_assets WHERE event_id=? AND delivery_stage=?').all(eventId, stage);
   for (const asset of assets) await bot.api.sendDocument(telegramId, new InputFile(path.join(uploadsDir, asset.stored_name), asset.original_name)).catch(console.error);
@@ -240,7 +256,10 @@ bot.on('message:contact', async ctx => {
 bot.on('message:text', async ctx => {
   const telegramId = String(ctx.from.id);
   const draft = db.prepare('SELECT * FROM application_drafts WHERE telegram_id=?').get(telegramId);
-  if (!draft) return;
+  if (!draft) {
+    if (!ctx.message.text.startsWith('/')) recordConversationMessage(telegramId, ctx.from.username, 'in', ctx.message.text.trim());
+    return;
+  }
   const text = ctx.message.text.trim();
   if (draft.stage === 'name') {
     if (text.length < 2) return ctx.reply('Напишите, пожалуйста, имя чуть подробнее.');
@@ -365,7 +384,8 @@ app.get('/api/admin/state', adminOnly, (req, res) => {
   const posts = db.prepare(`SELECT p.*, e.title AS event_title FROM posts p LEFT JOIN events e ON e.id=p.event_id ORDER BY p.updated_at DESC`).all();
   const postImages = db.prepare('SELECT id,post_id,original_name,position FROM post_images ORDER BY position').all();
   const postFiles = db.prepare('SELECT id,post_id,original_name FROM post_files ORDER BY created_at').all();
-  res.json({ events, selected, people, assets, guests, messageImages, eventImages, posts, postImages, postFiles, botUsername: process.env.BOT_USERNAME });
+  const conversations = db.prepare('SELECT * FROM conversations ORDER BY last_message_at DESC').all();
+  res.json({ events, selected, people, assets, guests, messageImages, eventImages, posts, postImages, postFiles, conversations, botUsername: process.env.BOT_USERNAME });
 });
 app.get('/admin/legacy', adminOnly, (req, res) => {
   const events = db.prepare('SELECT * FROM events ORDER BY starts_at DESC').all();
@@ -447,6 +467,24 @@ app.delete('/api/admin/events/:id', adminOnly, (req, res) => {
     db.prepare('DELETE FROM events WHERE id=?').run(event.id);
   })();
   storedNames.forEach(name => fs.unlink(path.join(uploadsDir, name), () => {}));
+  res.json({ ok: true });
+});
+app.get('/api/admin/dialogs/:telegramId', adminOnly, (req, res) => {
+  const conversation = db.prepare('SELECT * FROM conversations WHERE telegram_id=?').get(req.params.telegramId);
+  if (!conversation) return res.sendStatus(404);
+  db.prepare('UPDATE conversations SET unread_count=0 WHERE telegram_id=?').run(conversation.telegram_id);
+  const messages = db.prepare('SELECT * FROM conversation_messages WHERE telegram_id=? ORDER BY id').all(conversation.telegram_id);
+  res.json({ conversation: { ...conversation, unread_count: 0 }, messages });
+});
+app.post('/api/admin/dialogs/:telegramId/reply', adminOnly, async (req, res) => {
+  const conversation = db.prepare('SELECT * FROM conversations WHERE telegram_id=?').get(req.params.telegramId);
+  const text = telegramHtml(req.body.text || '');
+  if (!conversation) return res.sendStatus(404);
+  if (!text.replace(/<[^>]+>/g, '').trim()) return res.status(400).json({ error: 'Напишите сообщение' });
+  if (db.prepare('SELECT 1 FROM blocked_users WHERE telegram_id=?').get(conversation.telegram_id)) return res.status(400).json({ error: 'Доступ гостя к боту ограничен' });
+  try { await bot.api.sendMessage(conversation.telegram_id, text, messageOptions()); }
+  catch (error) { return res.status(400).json({ error: `Не удалось отправить: ${error.message}` }); }
+  recordConversationMessage(conversation.telegram_id, conversation.telegram_name, 'out', text);
   res.json({ ok: true });
 });
 app.post('/api/admin/events/:id', adminOnly, (req, res) => {

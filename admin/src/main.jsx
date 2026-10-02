@@ -12,6 +12,7 @@ import {
   Italic,
   LayoutDashboard,
   MessageSquare,
+  MessagesSquare,
   Lock,
   LockOpen,
   Link,
@@ -489,23 +490,69 @@ function PostEditor({ post, events, postImages, postFiles, onSaved, onBack }) {
   </>;
 }
 
+function Dialogs({ conversations, activeId, conversation, messages, onOpen, onSend }) {
+  const [text, setText] = useState("");
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState("");
+  useEffect(() => { setText(""); setError(""); }, [activeId]);
+  const send = async () => {
+    if (!text.trim()) return;
+    setSending(true); setError("");
+    try { await onSend(text); setText(""); }
+    catch (e) { setError(e.message); }
+    finally { setSending(false); }
+  };
+  return <>
+    <h1 className="text-3xl font-semibold tracking-tight">Диалоги</h1>
+    <p className="mt-2 text-muted-foreground">Сообщения, которые гости прислали этому боту. Здесь можно ответить от лица Perasperadastra.</p>
+    <Card className="mt-7 overflow-hidden">
+      <div className="grid min-h-[560px] md:grid-cols-[290px_minmax(0,1fr)]">
+        <aside className="border-b md:border-b-0 md:border-r">
+          <div className="border-b px-4 py-3 text-sm font-medium">Все диалоги</div>
+          <div className="max-h-[500px] overflow-y-auto p-2">
+            {conversations.length ? conversations.map((item) => <button key={item.telegram_id} onClick={() => onOpen(item.telegram_id)} className={`w-full rounded-md px-3 py-3 text-left ${activeId === item.telegram_id ? "bg-accent" : "hover:bg-muted"}`}>
+              <div className="flex items-center justify-between gap-2"><b className="truncate">{item.telegram_name ? `@${item.telegram_name}` : `Telegram ${item.telegram_id}`}</b>{count(item.unread_count) > 0 && <span className="rounded-full bg-foreground px-1.5 py-0.5 text-xs text-background">{item.unread_count}</span>}</div>
+              <p className="mt-1 truncate text-sm text-muted-foreground">{plainText(item.last_message)}</p>
+              <p className="mt-1 text-xs text-muted-foreground">{fmt(item.last_message_at)}</p>
+            </button>) : <p className="p-3 text-sm text-muted-foreground">Пока нет сообщений от гостей.</p>}
+          </div>
+        </aside>
+        <section className="flex min-w-0 flex-col">
+          {!conversation ? <div className="flex flex-1 items-center justify-center p-6 text-center text-sm text-muted-foreground">Выберите диалог слева, чтобы прочитать сообщения и ответить гостю.</div> : <>
+            <div className="border-b px-5 py-3"><b>{conversation.telegram_name ? `@${conversation.telegram_name}` : `Telegram ${conversation.telegram_id}`}</b><p className="mt-0.5 text-xs text-muted-foreground">Ответ будет отправлен в личный чат с ботом.</p></div>
+            <div className="flex flex-1 flex-col gap-3 overflow-y-auto bg-muted/20 p-4 sm:p-5">
+              {messages.map((message) => <div key={message.id} className={`max-w-[84%] rounded-lg px-3 py-2 text-sm leading-6 ${message.direction === "out" ? "self-end bg-foreground text-background" : "self-start border bg-background"}`}><p className="whitespace-pre-wrap">{plainText(message.text)}</p><p className={`mt-1 text-[11px] ${message.direction === "out" ? "text-background/60" : "text-muted-foreground"}`}>{fmt(message.created_at)}</p></div>)}
+            </div>
+            <div className="border-t p-3 sm:p-4"><div className="flex gap-2"><Textarea value={text} onChange={(event) => setText(event.target.value)} placeholder="Напишите ответ…" className="min-h-20 resize-none" /><Button className="self-end" onClick={send} disabled={sending || !text.trim()} title="Отправить" aria-label="Отправить">{sending ? "…" : <Send size={16} />}</Button></div>{error && <p className="mt-2 text-sm text-destructive">{error}</p>}</div>
+          </>}
+        </section>
+      </div>
+    </Card>
+  </>;
+}
+
 function App() {
   const initialRoute = new URLSearchParams(window.location.search);
   const initialPage = initialRoute.get("page") || "events";
   const initialEvent = Number(initialRoute.get("event")) || null;
   const initialPost = initialRoute.get("text") || (initialPage === "textEditor" ? initialRoute.get("post") : null);
   const initialBroadcast = Number(initialRoute.get("postId")) || null;
+  const initialDialog = initialRoute.get("dialog") || null;
   const [state, setState] = useState({
     events: [],
     people: [],
     guests: [],
     assets: [],
     posts: [],
+    conversations: [],
   });
   const [page, setPage] = useState(initialPage);
   const [active, setActive] = useState(initialEvent);
   const [activePost, setActivePost] = useState(initialPost);
   const [activeBroadcast, setActiveBroadcast] = useState(initialBroadcast);
+  const [activeDialog, setActiveDialog] = useState(initialDialog);
+  const [dialog, setDialog] = useState(null);
+  const [dialogMessages, setDialogMessages] = useState([]);
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [confirm, setConfirm] = useState(null);
@@ -530,9 +577,20 @@ function App() {
     if (needsEvent && active) params.set("event", active);
     if (page === "textEditor" && activePost) params.set("text", activePost);
     if (page === "postEditor" && activeBroadcast) params.set("postId", activeBroadcast);
+    if (page === "dialogs" && activeDialog) params.set("dialog", activeDialog);
     const query = params.toString();
     window.history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}`);
-  }, [page, active, activePost]);
+  }, [page, active, activePost, activeBroadcast, activeDialog]);
+  const loadDialog = async (telegramId) => {
+    try {
+      const response = await request(`/api/admin/dialogs/${encodeURIComponent(telegramId)}`);
+      const data = await response.json();
+      setActiveDialog(telegramId); setDialog(data.conversation); setDialogMessages(data.messages);
+      const refreshed = await request(`/api/admin/state${active ? `?event=${active}` : ""}`);
+      setState(await refreshed.json());
+    } catch (e) { setError(e.message); }
+  };
+  useEffect(() => { if (initialPage === "dialogs" && initialDialog) loadDialog(initialDialog); }, []);
   const event = state.events.find((e) => e.id === active);
   const create = async (form, images) => {
     const body = new FormData(form);
@@ -580,6 +638,7 @@ function App() {
     { id: "events", label: "Мероприятия", icon: LayoutDashboard },
     { id: "guests", label: "Гости", icon: Users },
     { id: "posts", label: "Посты", icon: MessageSquare },
+    { id: "dialogs", label: "Диалоги", icon: MessagesSquare },
   ];
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -592,7 +651,7 @@ function App() {
               return (
                 <button
                   key={item.id}
-                  onClick={() => setPage(item.id)}
+                  onClick={() => { setPage(item.id); if (item.id === "dialogs") load(active); }}
                   className={`flex items-center gap-2 rounded-md px-3 py-2 text-sm ${page === item.id ? "bg-accent font-medium" : "hover:bg-accent"}`}
                 >
                   <Icon size={16} />
@@ -828,6 +887,7 @@ function App() {
               <div className="mt-7 grid max-w-3xl gap-3">{state.posts.length ? state.posts.map((post) => { const images = (state.postImages || []).filter((image) => image.post_id === post.id); const files = (state.postFiles || []).filter((file) => file.post_id === post.id); return <Card key={post.id}><CardContent className="flex items-start justify-between gap-4 p-4 sm:p-5"><div className="min-w-0"><h2 className="font-semibold">{post.title}</h2><p className="mt-1 line-clamp-2 text-sm leading-6 text-muted-foreground">{plainText(post.content) || "Текст пока не добавлен"}</p>{!!images.length && <div className="mt-3 flex -space-x-1.5">{images.slice(0, 5).map((image) => <img key={image.id} src={`/api/admin/post-images/${image.id}`} className="h-8 w-8 rounded-md border-2 border-background object-cover" />)}{images.length > 5 && <span className="flex h-8 w-8 items-center justify-center rounded-md border-2 border-background bg-muted text-xs">+{images.length - 5}</span>}</div>}<p className="mt-3 text-xs text-muted-foreground">{post.audience === "all" ? "Все в боте" : post.audience === "event" ? `Гости: ${post.event_title || "мероприятие не выбрано"}` : "Гости выбраны вручную"}{files.length ? ` · файлов: ${files.length}` : ""} · изменён {fmt(post.updated_at)}</p></div><Button variant="secondary" size="sm" onClick={() => { setActiveBroadcast(post.id); setPage("postEditor"); }}><Pencil size={14} />Редактировать</Button></CardContent></Card>; }) : <Card><CardContent className="p-6 text-sm text-muted-foreground">Постов пока нет. Создайте первый, чтобы сохранить его для будущих рассылок.</CardContent></Card>}</div>
             </>
           )}
+          {page === "dialogs" && <Dialogs conversations={state.conversations || []} activeId={activeDialog} conversation={dialog} messages={dialogMessages} onOpen={loadDialog} onSend={async (text) => { await request(`/api/admin/dialogs/${encodeURIComponent(activeDialog)}/reply`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) }); await loadDialog(activeDialog); }} />}
           {page === "postEditor" && <PostEditor post={activeBroadcast ? state.posts.find((post) => post.id === activeBroadcast) : null} events={state.events} postImages={state.postImages || []} postFiles={state.postFiles || []} onSaved={async (id) => { setActiveBroadcast(id); await load(active); }} onBack={() => setPage("posts")} />}
       </main>
       <CreateDialog open={open} setOpen={setOpen} create={create} />
