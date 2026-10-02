@@ -364,6 +364,7 @@ bot.callbackQuery(/^answer:(yes|no):(\d+)$/, async ctx => {
     FROM invitations i JOIN applicants a ON a.id=i.applicant_id JOIN events e ON e.id=a.event_id WHERE i.id=?`).get(id);
   if (!row || row.telegram_id !== String(ctx.from.id)) return ctx.answerCallbackQuery({ text: 'Приглашение не найдено.', show_alert: true });
   if (row.status !== 'pending' || new Date(row.expires_at) <= new Date()) return ctx.answerCallbackQuery({ text: 'Срок ответа уже закончился.', show_alert: true });
+  await ctx.answerCallbackQuery();
   if (answer === 'no') {
     db.prepare("UPDATE invitations SET status='declined', responded_at=? WHERE id=?").run(nowIso(), id);
     updateInviteAttempt(id, 'declined', true);
@@ -378,9 +379,9 @@ bot.callbackQuery(/^answer:(yes|no):(\d+)$/, async ctx => {
     await ctx.editMessageText(eventText(row, 'confirmed'), messageOptions({ reply_markup: new InlineKeyboard().text('Не смогу прийти', `cancel:${id}`) })); await sendMessageImages(row.telegram_id, row.event_id, 'confirmed');
     if (row.chat_url) await ctx.reply(`Пока можете присоединиться к чату мероприятия: ${row.chat_url}`);
     await sendAssets(row.telegram_id, row.event_id, 'confirmed');
-    await ctx.replyWithPhoto(new Uint8Array(qr), { caption: `Ваш QR для входа на «${row.title}». Сохраните его.\nРезервный код: ${checkinToken.slice(0, 8).toUpperCase()}` });
+    await ctx.replyWithPhoto(new InputFile(qr, 'checkin.png'), { caption: `Ваш QR для входа на «${row.title}». Сохраните его.\nРезервный код: ${checkinToken.slice(0, 8).toUpperCase()}` });
   }
-  return ctx.answerCallbackQuery();
+  return;
 });
 
 bot.callbackQuery(/^cancel:(\d+)$/, async ctx => {

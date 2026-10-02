@@ -565,6 +565,7 @@ function App() {
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [selectedApplicants, setSelectedApplicants] = useState([]);
+  const [invitingIds, setInvitingIds] = useState([]);
   const [bulkNotice, setBulkNotice] = useState("");
   const [confirm, setConfirm] = useState(null);
   const [error, setError] = useState("");
@@ -582,6 +583,11 @@ function App() {
   useEffect(() => {
     load(initialEvent);
   }, []);
+  useEffect(() => {
+    if (page !== "detail" || !active) return undefined;
+    const refresh = window.setInterval(() => load(active), 20_000);
+    return () => window.clearInterval(refresh);
+  }, [page, active]);
   useEffect(() => {
     if (checkedStartEvent.current || initialPage !== "events" || initialEvent || !state.events.length) return;
     checkedStartEvent.current = true;
@@ -620,8 +626,20 @@ function App() {
     await load();
   };
   const invite = async (id) => {
-    await request(`/admin/invite/${id}`, { method: "POST" });
-    await load(active);
+    if (invitingIds.includes(id)) return;
+    setInvitingIds((current) => [...current, id]);
+    setState((current) => ({ ...current, people: current.people.map((person) => person.id === id ? { ...person, invitation_status: "pending", status: "invited" } : person) }));
+    try {
+      const response = await request(`/api/admin/events/${event.id}/invitations`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ applicantIds: [id] }) });
+      const result = await response.json();
+      if (!result.sent.length) throw new Error(result.skipped[0]?.reason || "Не удалось отправить приглашение");
+      await load(active);
+    } catch (e) {
+      setError(e.message);
+      await load(active);
+    } finally {
+      setInvitingIds((current) => current.filter((item) => item !== id));
+    }
   };
   const eligibleApplicants = state.people.filter((person) => person.telegram_id && !person.blocked && !["pending", "confirmed"].includes(person.invitation_status));
   useEffect(() => {
@@ -835,9 +853,9 @@ function App() {
                               !["pending", "confirmed"].includes(
                                 p.invitation_status,
                               ) && (
-                                <Button size="sm" onClick={() => invite(p.id)}>
+                                <Button size="sm" onClick={() => invite(p.id)} disabled={invitingIds.includes(p.id)}>
                                   <Send size={14} />
-                                  Пригласить
+                                  {invitingIds.includes(p.id) ? "Отправляем…" : "Пригласить"}
                                 </Button>
                               )}
                             {p.telegram_id && <Button variant="outline" size="sm" title={p.blocked ? "Вернуть доступ к боту" : "Ограничить доступ к боту"} aria-label={p.blocked ? "Вернуть доступ к боту" : "Ограничить доступ к боту"} onClick={() => toggleBlock(p)}><Ban size={14} /></Button>}
