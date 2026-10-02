@@ -637,25 +637,20 @@ function App() {
                   </p>
                 </div>
                 <div className="flex gap-2">
-                  <Button variant="outline" onClick={() => setPage("eventEditor")}>
+                  <Button variant="outline" className="h-9 w-9 p-0" title="Редактировать мероприятие" aria-label="Редактировать мероприятие" onClick={() => setPage("eventEditor")}>
                     <Pencil size={15} />
-                    Редактировать
                   </Button>
-                  <Button variant="outline" onClick={() => setPage("checkin")}>
+                  <Button variant="outline" className="h-9 w-9 p-0" title="Чек-ин" aria-label="Чек-ин" onClick={() => setPage("checkin")}>
                     <QrCode size={15} />
-                    Чек-ин
                   </Button>
-                  <Button variant="outline" onClick={() => setPage("texts")}>
+                  <Button variant="outline" className="h-9 w-9 p-0" title="Тексты события" aria-label="Тексты события" onClick={() => setPage("texts")}>
                     <FileText size={15} />
-                    Тексты
                   </Button>
-                  <Button variant="outline" onClick={copy}>
+                  <Button variant="outline" className="h-9 w-9 p-0" title={copied ? "Ссылка скопирована" : "Скопировать ссылку на регистрацию"} aria-label={copied ? "Ссылка скопирована" : "Скопировать ссылку на регистрацию"} onClick={copy}>
                     {copied ? <Check size={15} /> : <Copy size={15} />}
-                    {copied ? "Скопировано" : "Скопировать ссылку"}
                   </Button>
-                  <Button variant="outline" onClick={() => setRegistration(!event.registration_open)}>
+                  <Button variant="outline" className="h-9 w-9 p-0" title={event.registration_open ? "Закрыть регистрацию" : "Открыть регистрацию"} aria-label={event.registration_open ? "Закрыть регистрацию" : "Открыть регистрацию"} onClick={() => setRegistration(!event.registration_open)}>
                     {event.registration_open ? <Lock size={15} /> : <LockOpen size={15} />}
-                    {event.registration_open ? "Закрыть регистрацию" : "Открыть регистрацию"}
                   </Button>
                 </div>
               </div>
