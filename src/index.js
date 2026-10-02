@@ -208,7 +208,7 @@ async function continueStart(ctx, claim) {
     if (images.length) await bot.api.sendMediaGroup(ctx.chat.id, images.map((image, index) => ({ type: 'photo', media: new InputFile(path.join(uploadsDir, image.stored_name), image.original_name), caption: index === 0 ? `«${event.title}»` : undefined })));
     else if (event.cover_stored_name) await ctx.replyWithPhoto(new InputFile(path.join(uploadsDir, event.cover_stored_name), event.cover_original_name || 'cover'), { caption: `«${event.title}»` });
     await sendMessageImages(ctx.chat.id, event.id, 'registration');
-    return ctx.reply(`«${esc(event.title)}»<br><br>${telegramHtml(details)}`, messageOptions({ reply_markup: keyboard }));
+    return ctx.reply(`«${esc(event.title)}»\n\n${telegramHtml(details)}`, messageOptions({ reply_markup: keyboard }));
   }
   if (!claim) return ctx.reply('Добро пожаловать! Здесь можно посмотреть мероприятия, следить за своими заявками и написать организаторам.', { reply_markup: mainKeyboard() });
   const applicant = db.prepare('SELECT * FROM applicants WHERE claim_token = ?').get(claim);
