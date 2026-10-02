@@ -694,10 +694,7 @@ function App() {
               );
             })}
           </nav>
-          <Button onClick={() => setOpen(true)}>
-            <Plus size={16} />
-            Создать мероприятие
-          </Button>
+          <span className="w-10" aria-hidden="true" />
         </div>
       </header>
       <main className="mx-auto max-w-7xl min-w-0 p-6 lg:p-10">
@@ -708,12 +705,13 @@ function App() {
           )}
           {page === "events" && (
             <>
-              <h1 className="text-3xl font-semibold tracking-tight">
-                Мероприятия
-              </h1>
-              <p className="mt-2 text-muted-foreground">
-                Выберите событие, чтобы открыть гостей, тексты и материалы.
-              </p>
+              <div className="flex flex-wrap items-end justify-between gap-4">
+                <div>
+                  <h1 className="text-3xl font-semibold tracking-tight">Мероприятия</h1>
+                  <p className="mt-2 text-muted-foreground">Выберите событие, чтобы открыть гостей, тексты и материалы.</p>
+                </div>
+                <Button onClick={() => setOpen(true)}><Plus size={16} />Создать мероприятие</Button>
+              </div>
               <div className="mt-7 grid gap-4 md:grid-cols-2">
                 {state.events.map((item) => (
                   <button
