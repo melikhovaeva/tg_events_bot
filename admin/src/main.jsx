@@ -216,15 +216,22 @@ function FilePicker({ files, setFiles }) {
 }
 function CreateDialog({ open, setOpen, create }) {
   const [images, setImages] = useState([]);
+  const [saving, setSaving] = useState(false);
   const submit = async (e) => {
     e.preventDefault();
-    await create(e.currentTarget, images);
-    e.currentTarget.reset();
-    setImages([]);
-    setOpen(false);
+    if (saving) return;
+    setSaving(true);
+    try {
+      await create(e.currentTarget, images);
+      e.currentTarget.reset();
+      setImages([]);
+      setOpen(false);
+    } finally {
+      setSaving(false);
+    }
   };
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog open={open} onOpenChange={(nextOpen) => !saving && setOpen(nextOpen)}>
       <DialogContent className="max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Новое мероприятие</DialogTitle>
@@ -265,10 +272,11 @@ function CreateDialog({ open, setOpen, create }) {
               type="button"
               variant="outline"
               onClick={() => setOpen(false)}
+              disabled={saving}
             >
               Отмена
             </Button>
-            <Button>Создать мероприятие</Button>
+            <Button disabled={saving}>{saving ? "Создаём…" : "Создать мероприятие"}</Button>
           </div>
         </form>
       </DialogContent>
