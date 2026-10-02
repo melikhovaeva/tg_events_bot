@@ -340,7 +340,7 @@ async function showMyApplications(ctx) {
   }
 }
 bot.callbackQuery(/^event:(\d+)$/, async ctx => {
-  await ctx.answerCallbackQuery({ text: answer === 'yes' ? 'Участие подтверждено' : 'Отказ сохранён' });
+  await ctx.answerCallbackQuery({ text: 'Открываю мероприятие' });
   return continueStart(ctx, `event_${ctx.match[1]}`);
 });
 bot.callbackQuery(/^withdraw:(\d+)$/, async ctx => {
