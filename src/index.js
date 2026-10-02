@@ -1,5 +1,4 @@
 import 'dotenv/config';
-import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import Database from 'better-sqlite3';
@@ -7,24 +6,15 @@ import express from 'express';
 import multer from 'multer';
 import QRCode from 'qrcode';
 import { Bot, InlineKeyboard, Keyboard, InputFile } from 'grammy';
+import { agreementUrl, policyUrl, validateConfig } from './lib/config.js';
+import { dbPath, ensureDataDirectories, uploadsDir } from './lib/paths.js';
+import { defaultText, esc, eventText, messageOptions, nowIso, telegramHtml, token } from './lib/text.js';
 
-const required = ['BOT_TOKEN', 'BOT_USERNAME', 'ADMIN_PASSWORD'];
-const missing = required.filter(key => {
-  const value = process.env[key] || '';
-  return !value || /replace_with|your_bot|change-this/.test(value);
-});
-if (missing.length) {
-  console.error(`Не заполнены настройки в .env: ${missing.join(', ')}.`);
-  console.error('Скопируйте .env.example в .env и укажите значения.');
-  process.exit(1);
-}
+validateConfig();
 
-const dbPath = process.env.DATABASE_PATH || './data/events.sqlite';
-fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+ensureDataDirectories();
 const db = new Database(dbPath);
 db.pragma('journal_mode = WAL');
-const uploadsDir = path.resolve('./data/uploads');
-fs.mkdirSync(uploadsDir, { recursive: true });
 db.exec(`
 CREATE TABLE IF NOT EXISTS events (
   id INTEGER PRIMARY KEY, title TEXT NOT NULL, starts_at TEXT NOT NULL,
@@ -120,41 +110,6 @@ for (const [table, column, definition] of [
   try { db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`); } catch { /* already exists */ }
 }
 
-const nowIso = () => new Date().toISOString();
-const token = () => crypto.randomBytes(18).toString('base64url');
-const policyUrl = 'https://perasperadastra.ru/policy';
-const agreementUrl = 'https://perasperadastra.ru/agreement';
-const esc = (value = '') => String(value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const defaultText = {
-  received: 'Спасибо, заявка принята. Мы рассмотрим её и пришлём решение в этот бот.',
-  invite: 'Мы будем рады видеть вас на мероприятии «{event}»!\n\nПодтвердите участие в течение 24 часов, пожалуйста.',
-  confirmed: 'Участие подтверждено — место закреплено за вами. За сутки до мероприятия придёт напоминание.',
-  declined: 'Спасибо, что сообщили. Мы будем рады видеть вас на следующих мероприятиях!',
-  expired: 'К сожалению, мы не дождались вашего ответа и освобождаем место. Будем рады видеть вас на следующих мероприятиях!',
-  reminder: 'Напоминаем: «{event}» уже завтра. Ждём вас!',
-};
-const telegramHtml = (value = '') => String(value)
-  .replace(/<br\s*\/?\s*>/gi, '\n')
-  .replace(/\r\n|\r/g, '\n')
-  .split(/(<[^>]*>)/g)
-  .map(part => {
-    if (/^<\/?(div|p)>$/i.test(part)) return '\n';
-    if (/^<\/(b|strong)>$/i.test(part)) return '</b>';
-    if (/^<\/(i|em)>$/i.test(part)) return '</i>';
-    if (/^<\/u>$/i.test(part)) return '</u>';
-    if (/^<\/(s|strike|del)>$/i.test(part)) return '</s>';
-    if (/^<\/(a)>$/i.test(part)) return '</a>';
-    if (/^<(b|strong)>$/i.test(part)) return '<b>';
-    if (/^<(i|em)>$/i.test(part)) return '<i>';
-    if (/^<u>$/i.test(part)) return '<u>';
-    if (/^<(s|strike|del)>$/i.test(part)) return '<s>';
-    const link = part.match(/^<a\s+href=["'](https?:\/\/[^"'<>\s]+|tg:\/\/[^"'<>\s]+)["']\s*>$/i);
-    if (link) return `<a href="${esc(link[1])}">`;
-    return esc(part);
-  }).join('')
-  .replace(/\n{3,}/g, '\n\n');
-const eventText = (event, key) => telegramHtml((event[`${key}_text`] || defaultText[key]).replaceAll('{event}', event.title));
-const messageOptions = options => ({ parse_mode: 'HTML', ...options });
 const mainKeyboard = () => new Keyboard()
   .text('Мероприятия').text('Мои регистрации').row()
   .text('Написать организатору').resized().persistent();
