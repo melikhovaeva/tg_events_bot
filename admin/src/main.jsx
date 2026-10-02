@@ -844,7 +844,7 @@ function App() {
                             {p.telegram_name ? `@${p.telegram_name}` : "—"}
                           </td>
                           <td className="py-3">
-                            <span>{p.blocked ? "Доступ ограничен" : p.checked_in_at ? "Пришёл" : statusNames[p.invitation_status || p.status]}</span>
+                            <span>{p.blocked ? "Доступ ограничен" : p.checked_in_at ? "Пришёл" : p.invitation_status === "confirmed" && p.reminder_sent_at && !p.final_confirmed_at ? "Ждём финального ответа" : p.invitation_status === "confirmed" && p.final_confirmed_at ? "Участие подтверждено" : p.invitation_status === "confirmed" ? "Первично подтвердил" : statusNames[p.invitation_status || p.status]}</span>
                             {!p.blocked && p.invitation_status === "pending" && p.previous_invitation_status && <small className="block text-muted-foreground">Ранее: {statusNames[p.previous_invitation_status]}</small>}
                           </td>
                           <td className="py-3 text-right">

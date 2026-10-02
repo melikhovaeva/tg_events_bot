@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS applicants (
 CREATE TABLE IF NOT EXISTS invitations (
   id INTEGER PRIMARY KEY, applicant_id INTEGER NOT NULL UNIQUE REFERENCES applicants(id),
   status TEXT NOT NULL DEFAULT 'pending', expires_at TEXT NOT NULL,
-  responded_at TEXT, reminder_sent_at TEXT, checkin_token TEXT UNIQUE,
+  responded_at TEXT, reminder_sent_at TEXT, final_expires_at TEXT, checkin_token TEXT UNIQUE,
   final_confirmed_at TEXT,
   checked_in_at TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -104,7 +104,7 @@ for (const [table, column, definition] of [
   ['events', 'description', 'TEXT'], ['events', 'venue', 'TEXT'], ['applicants', 'phone', 'TEXT'],
   ['events', 'registration_text', 'TEXT'], ['events', 'received_text', 'TEXT'], ['events', 'invite_text', 'TEXT'],
   ['events', 'confirmed_text', 'TEXT'], ['events', 'declined_text', 'TEXT'], ['events', 'reminder_text', 'TEXT'],
-  ['events', 'expired_text', 'TEXT'], ['invitations', 'final_confirmed_at', 'TEXT'],
+  ['events', 'expired_text', 'TEXT'], ['invitations', 'final_confirmed_at', 'TEXT'], ['invitations', 'final_expires_at', 'TEXT'],
   ['events', 'cover_stored_name', 'TEXT'], ['events', 'cover_original_name', 'TEXT'],
   ['events', 'registration_open', 'INTEGER NOT NULL DEFAULT 1'],
 ]) {
@@ -371,15 +371,18 @@ bot.callbackQuery(/^answer:(yes|no):(\d+)$/, async ctx => {
     db.prepare("UPDATE applicants SET status='declined' WHERE id=?").run(row.applicant_id);
     await ctx.editMessageText(eventText(row, 'declined'), messageOptions()); await sendMessageImages(row.telegram_id, row.event_id, 'declined');
   } else {
-    const checkinToken = token();
-    db.prepare("UPDATE invitations SET status='confirmed', responded_at=?, checkin_token=? WHERE id=?").run(nowIso(), checkinToken, id);
+    const directCheckin = new Date(row.starts_at).getTime() - Date.now() <= 24 * 60 * 60 * 1000;
+    const checkinToken = directCheckin ? token() : null;
+    db.prepare("UPDATE invitations SET status='confirmed', responded_at=?, checkin_token=?, final_confirmed_at=? WHERE id=?").run(nowIso(), checkinToken, directCheckin ? nowIso() : null, id);
     updateInviteAttempt(id, 'confirmed', true);
     db.prepare("UPDATE applicants SET status='confirmed' WHERE id=?").run(row.applicant_id);
-    const qr = await QRCode.toBuffer(checkinToken, { width: 700, margin: 2 });
-    await ctx.editMessageText(eventText(row, 'confirmed'), messageOptions({ reply_markup: new InlineKeyboard().text('Не смогу прийти', `cancel:${id}`) })); await sendMessageImages(row.telegram_id, row.event_id, 'confirmed');
+    await ctx.editMessageText(directCheckin ? 'Участие подтверждено. QR-код для входа придёт следующим сообщением.' : eventText(row, 'confirmed'), messageOptions({ reply_markup: new InlineKeyboard().text('Не смогу прийти', `cancel:${id}`) })); await sendMessageImages(row.telegram_id, row.event_id, 'confirmed');
     if (row.chat_url) await ctx.reply(`Пока можете присоединиться к чату мероприятия: ${row.chat_url}`);
-    await sendAssets(row.telegram_id, row.event_id, 'confirmed');
-    await ctx.replyWithPhoto(new InputFile(qr, 'checkin.png'), { caption: `Ваш QR для входа на «${row.title}». Сохраните его.\nРезервный код: ${checkinToken.slice(0, 8).toUpperCase()}` });
+    if (directCheckin) {
+      const qr = await QRCode.toBuffer(checkinToken, { width: 700, margin: 2 });
+      await sendAssets(row.telegram_id, row.event_id, 'confirmed');
+      await ctx.replyWithPhoto(new InputFile(qr, 'checkin.png'), { caption: `Ваш QR для входа на «${row.title}». Сохраните его.\nРезервный код: ${checkinToken.slice(0, 8).toUpperCase()}` });
+    }
   }
   return;
 });
@@ -398,10 +401,16 @@ bot.callbackQuery(/^final:(yes|no):(\d+)$/, async ctx => {
   const [, answer, id] = ctx.match;
   const row = db.prepare('SELECT i.*, a.telegram_id, a.id applicant_id, e.id event_id, e.declined_text, e.title FROM invitations i JOIN applicants a ON a.id=i.applicant_id JOIN events e ON e.id=a.event_id WHERE i.id=?').get(id);
   if (!row || row.telegram_id !== String(ctx.from.id) || row.status !== 'confirmed') return ctx.answerCallbackQuery({ text: 'Приглашение не найдено.', show_alert: true });
+  if (row.final_confirmed_at || !row.final_expires_at || new Date(row.final_expires_at) <= new Date()) return ctx.answerCallbackQuery({ text: 'Срок финального подтверждения закончился.', show_alert: true });
   await ctx.answerCallbackQuery({ text: answer === 'yes' ? 'Подтверждение сохранено' : 'Участие отменено' });
   if (answer === 'no') { db.prepare("UPDATE invitations SET status='declined', responded_at=? WHERE id=?").run(nowIso(), id); updateInviteAttempt(id, 'declined', true); db.prepare("UPDATE applicants SET status='declined' WHERE id=?").run(row.applicant_id); await ctx.editMessageText(eventText(row, 'declined'), messageOptions()); await sendMessageImages(row.telegram_id, row.event_id, 'declined'); return; }
-  db.prepare('UPDATE invitations SET final_confirmed_at=? WHERE id=?').run(nowIso(), id);
-  await ctx.editMessageText('Спасибо, ждём вас на мероприятии!'); return;
+  const checkinToken = token();
+  db.prepare('UPDATE invitations SET final_confirmed_at=?,checkin_token=? WHERE id=?').run(nowIso(), checkinToken, id);
+  const qr = await QRCode.toBuffer(checkinToken, { width: 700, margin: 2 });
+  await ctx.editMessageText('Участие подтверждено. QR-код для входа придёт следующим сообщением.');
+  await sendAssets(row.telegram_id, row.event_id, 'confirmed');
+  await ctx.replyWithPhoto(new InputFile(qr, 'checkin.png'), { caption: `Ваш QR для входа на «${row.title}». Сохраните его.\nРезервный код: ${checkinToken.slice(0, 8).toUpperCase()}` });
+  return;
 });
 
 const app = express();
@@ -422,7 +431,7 @@ app.get('/api/admin/state', adminOnly, (req, res) => {
     FROM events e LEFT JOIN applicants a ON a.event_id=e.id LEFT JOIN invitations i ON i.applicant_id=a.id
     GROUP BY e.id ORDER BY e.starts_at DESC`).all();
   const selected = Number(req.query.event || events[0]?.id);
-  const people = selected ? db.prepare(`SELECT a.*, i.id invitation_id, i.status invitation_status, i.expires_at, i.checked_in_at,
+  const people = selected ? db.prepare(`SELECT a.*, i.id invitation_id, i.status invitation_status, i.expires_at, i.final_expires_at, i.final_confirmed_at, i.reminder_sent_at, i.checked_in_at,
     EXISTS(SELECT 1 FROM blocked_users b WHERE b.telegram_id=a.telegram_id) AS blocked,
     (SELECT ia.status FROM invitation_attempts ia WHERE ia.applicant_id=a.id AND ia.status!='pending' ORDER BY ia.id DESC LIMIT 1) AS previous_invitation_status
     FROM applicants a LEFT JOIN invitations i ON i.applicant_id=a.id WHERE a.event_id=? ORDER BY a.created_at DESC`).all(selected) : [];
