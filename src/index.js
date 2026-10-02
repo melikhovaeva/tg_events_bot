@@ -315,7 +315,7 @@ bot.on('message:text', async ctx => {
 });
 
 async function showEvents(ctx) {
-  const events = db.prepare("SELECT * FROM events WHERE registration_open=1 AND starts_at >= ? ORDER BY starts_at").all(nowIso());
+  const events = db.prepare("SELECT * FROM events WHERE registration_open=1 ORDER BY starts_at DESC").all();
   if (!events.length) return ctx.reply('Сейчас нет мероприятий с открытой регистрацией. Следите за анонсами Perasperadastra.', { reply_markup: mainKeyboard() });
   const keyboard = new InlineKeyboard();
   events.forEach(event => keyboard.text(event.title, `event:${event.id}`).row());
