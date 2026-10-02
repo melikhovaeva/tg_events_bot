@@ -568,6 +568,7 @@ function App() {
   const [bulkNotice, setBulkNotice] = useState("");
   const [confirm, setConfirm] = useState(null);
   const [error, setError] = useState("");
+  const checkedStartEvent = useRef(false);
   const load = async (id) => {
     try {
       const r = await request(`/api/admin/state${id ? `?event=${id}` : ""}`);
@@ -581,6 +582,15 @@ function App() {
   useEffect(() => {
     load(initialEvent);
   }, []);
+  useEffect(() => {
+    if (checkedStartEvent.current || initialPage !== "events" || initialEvent || !state.events.length) return;
+    checkedStartEvent.current = true;
+    const activeEvents = state.events.filter((item) => Boolean(item.registration_open));
+    if (activeEvents.length === 1) {
+      setActive(activeEvents[0].id);
+      setPage("detail");
+    }
+  }, [state.events]);
   useEffect(() => {
     const params = new URLSearchParams();
     const needsEvent = ["detail", "eventEditor", "texts", "textEditor", "checkin"].includes(page);
