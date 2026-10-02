@@ -206,7 +206,7 @@ async function requestProfile(ctx, continuation = '') {
   const telegramId = String(ctx.from.id);
   db.prepare(`INSERT INTO profile_drafts (telegram_id,continuation,stage,name) VALUES (?,?,'name',NULL)
     ON CONFLICT(telegram_id) DO UPDATE SET continuation=excluded.continuation,stage='name',name=NULL`).run(telegramId, continuation || '');
-  return ctx.reply('Чтобы оформить регистрацию быстрее, сохраните данные один раз.\n\nНапишите ваши имя и фамилию.', { reply_markup: { remove_keyboard: true } });
+  return ctx.reply('Спасибо. Теперь сохраним данные для регистрации на мероприятия Perasperadastra.\n\nФИО и номер телефона будут использоваться, чтобы оформить ваши будущие заявки и связаться с вами по событию.\n\nНапишите ваши имя и фамилию.', { reply_markup: { remove_keyboard: true } });
 }
 async function editApplicationMessage(ctx, text) {
   if (ctx.callbackQuery?.message?.photo) return ctx.editMessageCaption(text, messageOptions());
