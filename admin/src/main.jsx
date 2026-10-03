@@ -11,6 +11,7 @@ import {
   ImagePlus,
   Italic,
   LayoutDashboard,
+  LogOut,
   MessageSquare,
   MessagesSquare,
   Lock,
@@ -76,6 +77,10 @@ const fmt = (value) =>
 const count = (value) => Number(value || 0);
 async function request(url, options) {
   const r = await fetch(url, options);
+  if (r.status === 401) {
+    window.location.assign("/login/form");
+    throw new Error("Сессия закончилась. Войдите снова.");
+  }
   if (!r.ok) {
     const data = await r.json().catch(() => ({}));
     throw new Error(data.error || "Не удалось сохранить изменения");
@@ -722,7 +727,11 @@ function App() {
               );
             })}
           </nav>
-          <span className="w-10" aria-hidden="true" />
+          <form action="/logout" method="post">
+            <button title="Выйти из админки" aria-label="Выйти из админки" className="flex h-9 w-10 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground">
+              <LogOut size={16} />
+            </button>
+          </form>
         </div>
       </header>
       <main className="mx-auto max-w-7xl min-w-0 p-6 lg:p-10">

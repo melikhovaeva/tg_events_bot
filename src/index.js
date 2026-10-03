@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import Database from 'better-sqlite3';
@@ -7,6 +8,7 @@ import multer from 'multer';
 import QRCode from 'qrcode';
 import { Bot, InlineKeyboard, Keyboard, InputFile } from 'grammy';
 import { agreementUrl, policyUrl, validateConfig } from './lib/config.js';
+import { loginPage } from './lib/login-page.js';
 import { dbPath, ensureDataDirectories, uploadsDir } from './lib/paths.js';
 import { defaultText, esc, eventText, messageOptions, nowIso, telegramHtml, token } from './lib/text.js';
 import { createInvitationService } from './services/invitations.js';
@@ -127,12 +129,27 @@ function recordConversationMessage(telegramId, telegramName, direction, text) {
     ON CONFLICT(telegram_id) DO UPDATE SET telegram_name=excluded.telegram_name,last_message=excluded.last_message,last_message_at=excluded.last_message_at,unread_count=${direction === 'in' ? 'conversations.unread_count+1' : '0'}`)
     .run(telegramId, telegramName || null, text, createdAt, unreadCount);
 }
+const adminSessions = new Map();
+const sessionDurationMs = 7 * 24 * 60 * 60 * 1000;
+function readCookie(req, name) {
+  const pair = (req.headers.cookie || '').split(';').map(part => part.trim()).find(part => part.startsWith(`${name}=`));
+  return pair ? decodeURIComponent(pair.slice(name.length + 1)) : null;
+}
+function sameSecret(value, secret) {
+  const left = Buffer.from(String(value || ''));
+  const right = Buffer.from(String(secret || ''));
+  return left.length === right.length && crypto.timingSafeEqual(left, right);
+}
+function isAdmin(req) {
+  const id = readCookie(req, 'event_ops_session');
+  const expiresAt = id && adminSessions.get(id);
+  if (!expiresAt || expiresAt <= Date.now()) { if (id) adminSessions.delete(id); return false; }
+  return true;
+}
 const adminOnly = (req, res, next) => {
-  const header = req.headers.authorization || '';
-  const [kind, encoded] = header.split(' ');
-  const [user, pass] = kind === 'Basic' && encoded ? Buffer.from(encoded, 'base64').toString().split(':') : [];
-  if (user === 'admin' && pass === process.env.ADMIN_PASSWORD) return next();
-  res.set('WWW-Authenticate', 'Basic realm="Event admin"'); return res.status(401).send('Authorization required');
+  if (isAdmin(req)) return next();
+  if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'Сессия закончилась. Войдите снова.' });
+  return res.redirect('/login/form');
 };
 
 const bot = new Bot(process.env.BOT_TOKEN || '');
@@ -414,6 +431,7 @@ bot.callbackQuery(/^final:(yes|no):(\d+)$/, async ctx => {
 });
 
 const app = express();
+const adminBuild = path.resolve('./admin/dist');
 const upload = multer({
   storage: multer.diskStorage({
     destination: uploadsDir,
@@ -424,6 +442,22 @@ const upload = multer({
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 app.get('/health', (_, res) => res.json({ ok: true }));
+app.get('/brand/logo.svg', (_, res) => res.sendFile(path.join(adminBuild, 'logo_perasperadastra.svg')));
+app.get('/login', (req, res) => res.redirect(isAdmin(req) ? '/admin' : `/login/form${req.query.error ? '?error=1' : ''}`));
+app.get('/login/form', (req, res) => res.type('html').send(loginPage(req.query.error === '1')));
+app.post('/login', (req, res) => {
+  if (!sameSecret(req.body.password, process.env.ADMIN_PASSWORD)) return res.redirect('/login/form?error=1');
+  const sessionId = crypto.randomBytes(32).toString('base64url');
+  adminSessions.set(sessionId, Date.now() + sessionDurationMs);
+  res.set('Set-Cookie', `event_ops_session=${sessionId}; Max-Age=${sessionDurationMs / 1000}; Path=/; HttpOnly; SameSite=Lax${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`);
+  return res.redirect('/admin');
+});
+app.post('/logout', (req, res) => {
+  const sessionId = readCookie(req, 'event_ops_session');
+  if (sessionId) adminSessions.delete(sessionId);
+  res.set('Set-Cookie', 'event_ops_session=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax');
+  res.redirect('/login/form');
+});
 app.get('/', (_, res) => res.redirect('/admin'));
 app.get('/api/admin/state', adminOnly, (req, res) => {
   const events = db.prepare(`SELECT e.*, COUNT(DISTINCT a.id) AS registered, COUNT(DISTINCT i.id) AS invited,
@@ -458,7 +492,6 @@ app.get('/admin/legacy', adminOnly, (req, res) => {
     <p>${events.map(e => `<a href="/admin?event=${e.id}">${esc(e.title)}</a> — ${new Date(e.starts_at).toLocaleString('ru-RU')}</p>`).join('') || 'Событий пока нет.'}
     ${selected ? `${eventSettings(current, assets)}<hr><h2>Заявки</h2><p><strong>Ссылка на регистрацию:</strong> <a href="https://t.me/${encodeURIComponent(process.env.BOT_USERNAME)}?start=event_${selected}">открыть мероприятие в боте</a></p><p><a href="/admin/export/${selected}">Скачать CSV</a> · <a href="/admin/checkin">Режим чек-ина</a></p><table><tr><th>ФИО и телефон</th><th>Telegram</th><th>Статус</th><th>Действие</th></tr>${people.map(p => `<tr><td>${esc(p.name)}<br><small>${esc(p.phone || 'Телефон не указан')}</small></td><td>${p.telegram_id ? esc(p.telegram_name ? '@' + p.telegram_name : 'Username не задан') : 'Не подключён'}</td><td>${esc(p.invitation_status || p.status)}${p.checked_in_at ? ' · пришёл' : ''}</td><td>${p.telegram_id && !['confirmed','pending'].includes(p.invitation_status) ? `<form method="post" action="/admin/invite/${p.id}"><button>Пригласить</button></form>` : ''}</td></tr>`).join('')}</table>` : ''}`));
 });
-const adminBuild = path.resolve('./admin/dist');
 app.use('/admin', adminOnly, express.static(adminBuild));
 app.post('/admin/events', adminOnly, upload.array('images', 9), (req, res) => {
   const images = req.files || [];
