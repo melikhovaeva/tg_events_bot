@@ -1,0 +1,17 @@
+services:
+  event-ops:
+    build: .
+    container_name: perasperadastra-event-ops
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATA_DIR: /app/data
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - event_ops_data:/app/data
+
+volumes:
+  event_ops_data:

@@ -22,3 +22,15 @@ MVP для отбора гостей: регистрация в Telegram → р�
 - ФИО, обязательный номер телефона и Telegram username в каждой заявке.
 
 Telegram username нельзя получить, если человек не задал его в настройках Telegram: в этом случае в админке будет показано «Username не задан», но Telegram ID всё равно останется привязан к заявке.
+
+## Развёртывание в Yandex Cloud
+
+Проект подготовлен к запуску на одной виртуальной машине с Docker. Данные не находятся внутри образа: база SQLite, изображения, файлы и резервные копии лежат в постоянном Docker-томе `event_ops_data`.
+
+1. Создайте в Yandex Cloud VM с Ubuntu 24.04, 2 vCPU (20%) и 2 ГБ RAM, подключите публичный IP.
+2. Установите Docker и Docker Compose plugin.
+3. Клонируйте приватный репозиторий, скопируйте `.env.example` в `.env` и заполните `BOT_TOKEN`, `BOT_USERNAME`, `ADMIN_PASSWORD`. Не добавляйте `.env` в Git.
+4. Запустите `docker compose up -d --build`.
+5. Убедитесь, что `curl http://127.0.0.1:3000/health` возвращает `{"ok":true}`. Затем настройте домен, HTTPS и Nginx как обратный прокси к порту 3000.
+
+Перед обновлением: `docker compose build && docker compose up -d`. Периодическая резервная копия базы выполняется командой `docker compose exec event-ops npm run backup`; её стоит добавить в cron на VM. Для восстановления заменяется файл `events.sqlite` в томе после остановки контейнера.

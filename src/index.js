@@ -423,6 +423,7 @@ const upload = multer({
 });
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
+app.get('/health', (_, res) => res.json({ ok: true }));
 app.get('/', (_, res) => res.redirect('/admin'));
 app.get('/api/admin/state', adminOnly, (req, res) => {
   const events = db.prepare(`SELECT e.*, COUNT(DISTINCT a.id) AS registered, COUNT(DISTINCT i.id) AS invited,
@@ -734,9 +735,21 @@ function layout(title, body) { return `<!doctype html><html lang="ru"><meta char
 </style><body><main class="shell"><header class="masthead"><a class="brand" href="/admin">EVENT<i>OPS</i></a><span>управление мероприятиями</span></header><section class="page">${body}</section></main></body></html>`; }
 
 const port = Number(process.env.PORT || 3000);
-app.listen(port, () => console.log(`Admin: http://localhost:${port}/admin`));
+const server = app.listen(port, () => console.log(`Admin: http://localhost:${port}/admin`));
 if (process.env.BOT_TOKEN) {
   bot.start().catch(error => console.error('Telegram bot did not start:', error.message));
   setInterval(() => runAutomation().catch(console.error), 60_000);
   runAutomation().catch(console.error);
 }
+
+function shutdown(signal) {
+  console.log(`${signal}: завершаем работу…`);
+  bot.stop();
+  server.close(() => {
+    db.close();
+    process.exit(0);
+  });
+  setTimeout(() => process.exit(1), 10_000).unref();
+}
+process.once('SIGTERM', () => shutdown('SIGTERM'));
+process.once('SIGINT', () => shutdown('SIGINT'));

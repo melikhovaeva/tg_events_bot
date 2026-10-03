@@ -8,6 +8,7 @@
     "dev": "node --watch src/index.js",
     "build:admin": "vite build --config admin/vite.config.js",
     "dev:admin": "vite --config admin/vite.config.js",
+    "backup": "node scripts/backup.js",
     "test": "node --test"
   },
   "dependencies": {
