@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import fs from 'node:fs';
-import path from 'node:path';
 import Database from 'better-sqlite3';
+import { createDatabaseBackup } from '../src/lib/backup.js';
 import { backupsDir, dataDir, dbPath } from '../src/lib/paths.js';
 
 fs.mkdirSync(dataDir, { recursive: true });
@@ -12,12 +12,10 @@ if (!fs.existsSync(dbPath)) {
   process.exit(1);
 }
 
-const date = new Date().toISOString().replaceAll(':', '-').replace(/\.\d{3}Z$/, 'Z');
-const target = path.join(backupsDir, `events-${date}.sqlite`);
 const db = new Database(dbPath, { readonly: true });
 
 try {
-  await db.backup(target);
+  const target = await createDatabaseBackup(db, backupsDir);
   console.log(`Резервная копия создана: ${target}`);
 } finally {
   db.close();

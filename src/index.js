@@ -8,8 +8,9 @@ import multer from 'multer';
 import QRCode from 'qrcode';
 import { Bot, InlineKeyboard, Keyboard, InputFile } from 'grammy';
 import { agreementUrl, policyUrl, validateConfig } from './lib/config.js';
+import { createDatabaseBackup, millisecondsUntilNextMoscowBackup } from './lib/backup.js';
 import { loginPage } from './lib/login-page.js';
-import { dbPath, ensureDataDirectories, uploadsDir } from './lib/paths.js';
+import { backupsDir, dbPath, ensureDataDirectories, uploadsDir } from './lib/paths.js';
 import { defaultText, esc, eventText, messageOptions, nowIso, telegramHtml, token } from './lib/text.js';
 import { createInvitationService } from './services/invitations.js';
 
@@ -772,6 +773,31 @@ function layout(title, body) { return `<!doctype html><html lang="ru"><meta char
 
 const port = Number(process.env.PORT || 3000);
 const server = app.listen(port, () => console.log(`Admin: http://localhost:${port}/admin`));
+
+async function runDailyBackup() {
+  try {
+    const target = await createDatabaseBackup(db, backupsDir);
+    console.log(`Database backup: ${target}`);
+  } catch (error) {
+    console.error('Database backup failed:', error);
+  }
+}
+
+function scheduleDailyBackup() {
+  const scheduleNext = () => {
+    const delay = millisecondsUntilNextMoscowBackup();
+    setTimeout(async () => {
+      await runDailyBackup();
+      scheduleNext();
+    }, delay).unref();
+  };
+
+  void runDailyBackup();
+  scheduleNext();
+}
+
+scheduleDailyBackup();
+
 function startBot() {
   bot.start().catch((error) => {
     console.error('Telegram bot did not start:', error.message);
