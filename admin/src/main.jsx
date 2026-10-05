@@ -572,6 +572,7 @@ function App() {
   const [selectedApplicants, setSelectedApplicants] = useState([]);
   const [invitingIds, setInvitingIds] = useState([]);
   const [bulkNotice, setBulkNotice] = useState("");
+  const [notice, setNotice] = useState("");
   const [confirm, setConfirm] = useState(null);
   const [error, setError] = useState("");
   const checkedStartEvent = useRef(false);
@@ -628,7 +629,11 @@ function App() {
     const body = new FormData(form);
     images.forEach((i) => body.append("images", i.file));
     await request("/admin/events", { method: "POST", body });
-    await load();
+    // The server has already accepted the event at this point.  Do not keep
+    // the dialog open while the comparatively slow state refresh runs.
+    setNotice("Мероприятие создано");
+    window.setTimeout(() => setNotice(""), 3500);
+    void load();
   };
   const invite = async (id) => {
     if (invitingIds.includes(id)) return;
@@ -738,6 +743,11 @@ function App() {
           {error && (
             <p className="mb-5 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
               {error}
+            </p>
+          )}
+          {notice && (
+            <p className="mb-5 rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
+              {notice}
             </p>
           )}
           {page === "events" && (
