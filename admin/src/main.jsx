@@ -315,11 +315,13 @@ const textPosts = [
 const plainText = (html = "") => html.replace(/<br\s*\/?>/gi, " ").replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ");
 
 function editorHtml(value = "") {
-  const raw = String(value);
-  let source = /&lt;\/?(?:p|div|b|strong|i|em|u|s|strike|del|a)\b/i.test(raw)
-    ? raw.replace(/&lt;/gi, "<").replace(/&gt;/gi, ">")
-    : raw;
-  while (/&amp;nbsp;/i.test(source)) source = source.replace(/&amp;nbsp;/gi, "&nbsp;");
+  const entities = { amp: "&", lt: "<", gt: ">", quot: '"', "#39": "'", "#x27": "'", nbsp: " ", "#160": " " };
+  let source = String(value);
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const next = source.replace(/&(amp|lt|gt|quot|#39|#x27|nbsp|#160);/gi, (_, name) => entities[name.toLowerCase()] || _);
+    if (next === source) break;
+    source = next;
+  }
   const template = document.createElement("template");
   template.innerHTML = source;
   const allowed = new Set(["P", "DIV", "BR", "B", "STRONG", "I", "EM", "U", "S", "STRIKE", "DEL", "A"]);

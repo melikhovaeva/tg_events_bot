@@ -13,21 +13,28 @@ export const defaultText = {
   reminder: 'Напоминаем: «{event}» уже завтра. Ждём вас!',
 };
 
+function decodeEditorEntities(value) {
+  const entities = { amp: '&', lt: '<', gt: '>', quot: '"', '#39': "'", '#x27': "'", nbsp: ' ', '#160': ' ' };
+  let decoded = String(value);
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const next = decoded.replace(/&(amp|lt|gt|quot|#39|#x27|nbsp|#160);/gi, (_, name) => entities[name.toLowerCase()] || _);
+    if (next === decoded) break;
+    decoded = next;
+  }
+  return decoded;
+}
+
 export const telegramHtml = (value = '') => {
-  const raw = String(value);
-  // Earlier versions escaped pasted rich text with attributes (for example
-  // "<p style=…>") into visible text. Decode only recognised editor tags so
-  // existing announcements become editable again.
-  let valueWithDecodedTags = /&lt;\/?(?:p|div|b|strong|i|em|u|s|strike|del|a)\b/i.test(raw)
-    ? raw.replace(/&lt;/gi, '<').replace(/&gt;/gi, '>')
-    : raw;
-  while (/&amp;nbsp;/i.test(valueWithDecodedTags)) valueWithDecodedTags = valueWithDecodedTags.replace(/&amp;nbsp;/gi, '&nbsp;');
+  // Old pasted content may have been entity-escaped several times. Restore it
+  // before reducing it to the small, safe HTML subset supported by Telegram.
+  const valueWithDecodedTags = decodeEditorEntities(value);
   return valueWithDecodedTags
-  .replace(/&nbsp;/gi, ' ')
   .replace(/<br\s*\/?\s*>/gi, '\n')
   .replace(/\r\n|\r/g, '\n')
   .split(/(<[^>]*>)/g)
   .map((part) => {
+    if (/^<(h[1-6])(?:\s[^>]*)?>$/i.test(part)) return '\n<b>';
+    if (/^<\/(h[1-6])>$/i.test(part)) return '</b>\n';
     if (/^<\/?(div|p)(?:\s[^>]*)?>$/i.test(part)) return '\n';
     if (/^<\/(b|strong)>$/i.test(part)) return '</b>';
     if (/^<\/(i|em)>$/i.test(part)) return '</i>';
