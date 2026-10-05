@@ -16,7 +16,9 @@ COPY scripts ./scripts
 COPY --from=build /app/admin/dist ./admin/dist
 RUN mkdir -p /app/data/uploads /app/data/backups \
   && chown -R node:node /app
-USER node
+# Railway mounts persistent volumes as root-owned directories. Keep the process
+# as root so it can initialise the database and upload folders inside /app/data.
+# The mounted path is the only writable application storage in production.
 EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:3000/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
