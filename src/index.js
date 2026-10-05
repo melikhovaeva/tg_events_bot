@@ -134,6 +134,9 @@ function recordConversationMessage(telegramId, telegramName, direction, text) {
     .run(telegramId, telegramName || null, text, createdAt, unreadCount);
 }
 const sessionDurationMs = 30 * 24 * 60 * 60 * 1000;
+function sessionCookie(sessionId) {
+  return `event_ops_session=${sessionId}; Max-Age=${sessionDurationMs / 1000}; Path=/; HttpOnly; SameSite=Lax${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`;
+}
 function readCookie(req, name) {
   const pair = (req.headers.cookie || '').split(';').map(part => part.trim()).find(part => part.startsWith(`${name}=`));
   return pair ? decodeURIComponent(pair.slice(name.length + 1)) : null;
@@ -154,7 +157,12 @@ function isAdmin(req) {
   return true;
 }
 const adminOnly = (req, res, next) => {
-  if (isAdmin(req)) return next();
+  if (isAdmin(req)) {
+    const sessionId = readCookie(req, 'event_ops_session');
+    db.prepare('UPDATE admin_sessions SET expires_at=? WHERE id=?').run(Date.now() + sessionDurationMs, sessionId);
+    res.set('Set-Cookie', sessionCookie(sessionId));
+    return next();
+  }
   if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'Сессия закончилась. Войдите снова.' });
   return res.redirect('/login/form');
 };
@@ -460,7 +468,7 @@ app.post('/login', (req, res) => {
   const sessionId = crypto.randomBytes(32).toString('base64url');
   db.prepare('DELETE FROM admin_sessions WHERE expires_at <= ?').run(Date.now());
   db.prepare('INSERT INTO admin_sessions (id,expires_at) VALUES (?,?)').run(sessionId, Date.now() + sessionDurationMs);
-  res.set('Set-Cookie', `event_ops_session=${sessionId}; Max-Age=${sessionDurationMs / 1000}; Path=/; HttpOnly; SameSite=Lax${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`);
+  res.set('Set-Cookie', sessionCookie(sessionId));
   return res.redirect('/admin');
 });
 app.post('/logout', (req, res) => {
