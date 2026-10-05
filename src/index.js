@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS events (
 );
 CREATE TABLE IF NOT EXISTS applicants (
   id INTEGER PRIMARY KEY, event_id INTEGER NOT NULL REFERENCES events(id),
-  name TEXT NOT NULL, email TEXT, phone TEXT, timepad_id TEXT,
+  name TEXT NOT NULL, email TEXT, phone TEXT, timepad_id TEXT, was_school_student INTEGER,
   claim_token TEXT NOT NULL UNIQUE, telegram_id TEXT, telegram_name TEXT,
   status TEXT NOT NULL DEFAULT 'awaiting_review', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -51,12 +51,12 @@ CREATE TABLE IF NOT EXISTS application_drafts (
 );
 CREATE TABLE IF NOT EXISTS telegram_profiles (
   telegram_id TEXT PRIMARY KEY, name TEXT NOT NULL, phone TEXT NOT NULL,
-  telegram_name TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  telegram_name TEXT, was_school_student INTEGER, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS profile_drafts (
   telegram_id TEXT PRIMARY KEY, continuation TEXT NOT NULL DEFAULT '', stage TEXT NOT NULL,
-  name TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  name TEXT, phone TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS event_assets (
   id INTEGER PRIMARY KEY, event_id INTEGER NOT NULL REFERENCES events(id), original_name TEXT NOT NULL,
@@ -113,6 +113,9 @@ for (const [table, column, definition] of [
   ['events', 'expired_text', 'TEXT'], ['invitations', 'final_confirmed_at', 'TEXT'], ['invitations', 'final_expires_at', 'TEXT'],
   ['events', 'cover_stored_name', 'TEXT'], ['events', 'cover_original_name', 'TEXT'],
   ['events', 'registration_open', 'INTEGER NOT NULL DEFAULT 1'],
+  ['applicants', 'was_school_student', 'INTEGER'],
+  ['telegram_profiles', 'was_school_student', 'INTEGER'],
+  ['profile_drafts', 'phone', 'TEXT'],
 ]) {
   try { db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`); } catch { /* already exists */ }
 }
@@ -186,9 +189,17 @@ bot.use(async (ctx, next) => {
 });
 async function requestProfile(ctx, continuation = '') {
   const telegramId = String(ctx.from.id);
-  db.prepare(`INSERT INTO profile_drafts (telegram_id,continuation,stage,name) VALUES (?,?,'name',NULL)
-    ON CONFLICT(telegram_id) DO UPDATE SET continuation=excluded.continuation,stage='name',name=NULL`).run(telegramId, continuation || '');
+  db.prepare(`INSERT INTO profile_drafts (telegram_id,continuation,stage,name,phone) VALUES (?,?,'name',NULL,NULL)
+    ON CONFLICT(telegram_id) DO UPDATE SET continuation=excluded.continuation,stage='name',name=NULL,phone=NULL`).run(telegramId, continuation || '');
   return ctx.reply('Спасибо. Теперь сохраним данные для регистрации на мероприятия Perasperadastra.\n\nФИО и номер телефона будут использоваться, чтобы оформить ваши будущие заявки и связаться с вами по событию.\n\nНапишите ваши имя и фамилию.', { reply_markup: { remove_keyboard: true } });
+}
+async function requestSchoolStatus(ctx, continuation, profile) {
+  const telegramId = String(ctx.from.id);
+  db.prepare(`INSERT INTO profile_drafts (telegram_id,continuation,stage,name,phone) VALUES (?,?,'school',?,?)
+    ON CONFLICT(telegram_id) DO UPDATE SET continuation=excluded.continuation,stage='school',name=excluded.name,phone=excluded.phone`)
+    .run(telegramId, continuation || '', profile.name, profile.phone);
+  const keyboard = new InlineKeyboard().text('Да', 'school:yes').text('Нет', 'school:no');
+  return ctx.reply('Подскажите, пожалуйста: вы были студентом школы Perasperadastra?', { reply_markup: keyboard });
 }
 async function editApplicationMessage(ctx, text) {
   if (ctx.callbackQuery?.message?.photo) return ctx.editMessageCaption(text, messageOptions());
@@ -197,6 +208,7 @@ async function editApplicationMessage(ctx, text) {
 async function continueStart(ctx, claim) {
   const profile = db.prepare('SELECT * FROM telegram_profiles WHERE telegram_id=?').get(String(ctx.from.id));
   if (!profile) return requestProfile(ctx, claim);
+  if (profile.was_school_student === null || profile.was_school_student === undefined) return requestSchoolStatus(ctx, claim, profile);
   const eventMatch = claim?.match(/^event_(\d+)$/);
   if (eventMatch) {
     const event = db.prepare('SELECT * FROM events WHERE id=?').get(eventMatch[1]);
@@ -257,6 +269,20 @@ bot.callbackQuery(/^consent:(.*)$/, async ctx => {
   return continueStart(ctx, claim);
 });
 
+bot.callbackQuery(/^school:(yes|no)$/, async ctx => {
+  const telegramId = String(ctx.from.id);
+  const draft = db.prepare("SELECT * FROM profile_drafts WHERE telegram_id=? AND stage='school'").get(telegramId);
+  if (!draft) return ctx.answerCallbackQuery({ text: 'Анкета уже заполнена.', show_alert: true });
+  const wasSchoolStudent = ctx.match[1] === 'yes' ? 1 : 0;
+  db.prepare(`INSERT INTO telegram_profiles (telegram_id,name,phone,telegram_name,was_school_student,created_at,updated_at) VALUES (?,?,?,?,?,?,?)
+    ON CONFLICT(telegram_id) DO UPDATE SET name=excluded.name,phone=excluded.phone,telegram_name=excluded.telegram_name,was_school_student=excluded.was_school_student,updated_at=excluded.updated_at`)
+    .run(telegramId, draft.name, draft.phone, ctx.from.username || null, wasSchoolStudent, nowIso(), nowIso());
+  db.prepare('DELETE FROM profile_drafts WHERE telegram_id=?').run(telegramId);
+  await ctx.answerCallbackQuery({ text: 'Ответ сохранён' });
+  await ctx.editMessageText('Спасибо, ответ сохранён.');
+  return continueStart(ctx, draft.continuation);
+});
+
 bot.callbackQuery(/^apply:(\d+)$/, async ctx => {
   const event = db.prepare('SELECT * FROM events WHERE id=?').get(ctx.match[1]);
   if (!event) return ctx.answerCallbackQuery({ text: 'Мероприятие не найдено.', show_alert: true });
@@ -278,10 +304,10 @@ bot.callbackQuery(/^apply:(\d+)$/, async ctx => {
       db.prepare("UPDATE applicants SET status='awaiting_review' WHERE id=?").run(existing.id);
     })();
   }
-  if (existing) db.prepare("UPDATE applicants SET name=?,phone=?,claim_token=?,telegram_name=?,status='awaiting_review' WHERE id=?")
-    .run(profile.name, profile.phone, token(), ctx.from.username || null, existing.id);
-  else db.prepare('INSERT INTO applicants (event_id,name,phone,claim_token,telegram_id,telegram_name,status) VALUES (?,?,?,?,?,?,?)')
-    .run(event.id, profile.name, profile.phone, token(), telegramId, ctx.from.username || null, 'awaiting_review');
+  if (existing) db.prepare("UPDATE applicants SET name=?,phone=?,was_school_student=?,claim_token=?,telegram_name=?,status='awaiting_review' WHERE id=?")
+    .run(profile.name, profile.phone, profile.was_school_student, token(), ctx.from.username || null, existing.id);
+  else db.prepare('INSERT INTO applicants (event_id,name,phone,was_school_student,claim_token,telegram_id,telegram_name,status) VALUES (?,?,?,?,?,?,?,?)')
+    .run(event.id, profile.name, profile.phone, profile.was_school_student, token(), telegramId, ctx.from.username || null, 'awaiting_review');
   await ctx.answerCallbackQuery({ text: 'Регистрация принята' });
   return editApplicationMessage(ctx, eventText(event, 'received'));
 });
@@ -290,11 +316,9 @@ bot.on('message:contact', async ctx => {
   const telegramId = String(ctx.from.id);
   const profileDraft = db.prepare('SELECT * FROM profile_drafts WHERE telegram_id=? AND stage=\'phone\'').get(telegramId);
   if (profileDraft && ctx.message.contact.user_id === ctx.from.id) {
-    db.prepare(`INSERT INTO telegram_profiles (telegram_id,name,phone,telegram_name,created_at,updated_at) VALUES (?,?,?,?,?,?)
-      ON CONFLICT(telegram_id) DO UPDATE SET name=excluded.name,phone=excluded.phone,telegram_name=excluded.telegram_name,updated_at=excluded.updated_at`)
-      .run(telegramId, profileDraft.name, ctx.message.contact.phone_number, ctx.from.username || null, nowIso(), nowIso());
-    db.prepare('DELETE FROM profile_drafts WHERE telegram_id=?').run(telegramId);
-    return continueStart(ctx, profileDraft.continuation);
+    db.prepare("UPDATE profile_drafts SET stage='school',phone=? WHERE telegram_id=?").run(ctx.message.contact.phone_number, telegramId);
+    const keyboard = new InlineKeyboard().text('Да', 'school:yes').text('Нет', 'school:no');
+    return ctx.reply('Подскажите, пожалуйста: вы были студентом школы Perasperadastra?', { reply_markup: keyboard });
   }
   const draft = db.prepare("SELECT * FROM application_drafts WHERE telegram_id=? AND stage='phone'").get(telegramId);
   if (!draft || ctx.message.contact.user_id !== ctx.from.id) return;
@@ -320,6 +344,7 @@ bot.on('message:text', async ctx => {
       const keyboard = new Keyboard().requestContact('📱 Отправить мой номер').resized().oneTime();
       return ctx.reply('Теперь отправьте номер телефона кнопкой ниже. Он нужен для связи по мероприятию.', { reply_markup: keyboard });
     }
+    if (profileDraft.stage === 'school') return ctx.reply('Пожалуйста, выберите «Да» или «Нет» кнопкой выше.');
     return ctx.reply('Для продолжения нажмите «Отправить мой номер».');
   }
   const draft = db.prepare('SELECT * FROM application_drafts WHERE telegram_id=?').get(telegramId);
@@ -491,7 +516,8 @@ app.get('/api/admin/state', adminOnly, (req, res) => {
     FROM applicants a LEFT JOIN invitations i ON i.applicant_id=a.id WHERE a.event_id=? ORDER BY a.created_at DESC`).all(selected) : [];
   const assets = selected ? db.prepare('SELECT * FROM event_assets WHERE event_id=? ORDER BY created_at DESC').all(selected) : [];
   const guests = db.prepare(`SELECT a.telegram_id, a.telegram_name, a.name, a.phone, MAX(a.created_at) AS last_seen,
-    COUNT(a.id) AS events_count FROM applicants a GROUP BY COALESCE(a.telegram_id, 'applicant:' || a.id) ORDER BY last_seen DESC`).all();
+    MAX(a.was_school_student) AS was_school_student, COUNT(a.id) AS events_count
+    FROM applicants a GROUP BY COALESCE(a.telegram_id, 'applicant:' || a.id) ORDER BY last_seen DESC`).all();
   const messageImages = selected ? db.prepare('SELECT id,message_key,original_name,position FROM event_message_images WHERE event_id=? ORDER BY position').all(selected) : [];
   const eventImages = selected ? db.prepare('SELECT id,event_id,original_name,position FROM event_images WHERE event_id=? ORDER BY position').all(selected) : [];
   const posts = db.prepare(`SELECT p.*, e.title AS event_title FROM posts p LEFT JOIN events e ON e.id=p.event_id ORDER BY p.updated_at DESC`).all();
@@ -767,7 +793,7 @@ app.get('/admin/assets/:id', adminOnly, (req, res) => { const asset = db.prepare
 app.post('/admin/invite/:id', adminOnly, async (req, res) => { try { await sendInvite(Number(req.params.id)); } catch (e) { return res.status(400).send(layout('Ошибка', `<p>${esc(e.message)}</p><p><a href="/admin">Назад</a></p>`)); } res.redirect('back'); });
 app.get('/admin/checkin', adminOnly, (req, res) => res.send(layout('Чек-ин', `<h1>Чек-ин</h1><form method="post"><input name="code" autofocus placeholder="Вставьте QR-значение или код"><button>Отметить</button></form><p>QR можно сканировать камерой телефона в любом совместимом сканере и вставить полученное значение сюда.</p>`)));
 app.post('/admin/checkin', adminOnly, (req, res) => { const raw = String(req.body.code || '').trim(); const row = db.prepare(`SELECT i.*, a.name, e.title FROM invitations i JOIN applicants a ON a.id=i.applicant_id JOIN events e ON e.id=a.event_id WHERE i.checkin_token=?`).get(raw) || db.prepare(`SELECT i.*, a.name, e.title FROM invitations i JOIN applicants a ON a.id=i.applicant_id JOIN events e ON e.id=a.event_id WHERE upper(substr(i.checkin_token,1,8))=?`).get(raw.toUpperCase()); if (!row) return res.status(404).send(layout('Не найдено', '<p>Код не найден.</p><p><a href="/admin/checkin">Назад</a></p>')); if (row.checked_in_at) return res.send(layout('Уже отмечен', `<p>${esc(row.name)} уже был отмечен: ${new Date(row.checked_in_at).toLocaleString('ru-RU')}.</p><p><a href="/admin/checkin">Назад</a></p>`)); db.prepare('UPDATE invitations SET checked_in_at=? WHERE id=?').run(nowIso(), row.id); res.send(layout('Готово', `<h1>✓ ${esc(row.name)}</h1><p>Отмечен на «${esc(row.title)}».</p><p><a href="/admin/checkin">Сканировать следующего</a></p>`)); });
-app.get('/admin/export/:eventId', adminOnly, (req, res) => { const rows = db.prepare(`SELECT a.name,a.phone,a.telegram_name,a.status,i.status invitation_status,i.checked_in_at FROM applicants a LEFT JOIN invitations i ON i.applicant_id=a.id WHERE a.event_id=?`).all(req.params.eventId); const csv = ['name,phone,telegram_username,applicant_status,invitation_status,checked_in_at', ...rows.map(r => [r.name,r.phone,r.telegram_name,r.status,r.invitation_status,r.checked_in_at].map(v => `"${String(v || '').replaceAll('"','""')}"`).join(','))].join('\n'); res.type('text/csv').attachment('guests.csv').send(csv); });
+app.get('/admin/export/:eventId', adminOnly, (req, res) => { const rows = db.prepare(`SELECT a.name,a.phone,a.telegram_name,a.was_school_student,a.status,i.status invitation_status,i.checked_in_at FROM applicants a LEFT JOIN invitations i ON i.applicant_id=a.id WHERE a.event_id=?`).all(req.params.eventId); const csv = ['name,phone,telegram_username,was_school_student,applicant_status,invitation_status,checked_in_at', ...rows.map(r => [r.name,r.phone,r.telegram_name,r.was_school_student === null ? '' : r.was_school_student ? 'yes' : 'no',r.status,r.invitation_status,r.checked_in_at].map(v => `"${String(v || '').replaceAll('"','""')}"`).join(','))].join('\n'); res.type('text/csv').attachment('guests.csv').send(csv); });
 function eventSettings(event, assets) {
   const field = (name, label, fallback = '') => `<label>${label}<textarea name="${name}" rows="3" placeholder="${esc(fallback)}">${esc(event[name] || fallback)}</textarea></label>`;
   return `<hr><details open><summary><strong>Тексты и материалы</strong></summary><form method="post" action="/admin/events/${event.id}/settings" class="settings">

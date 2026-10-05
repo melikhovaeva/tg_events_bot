@@ -889,6 +889,7 @@ function App() {
                             <span className="text-muted-foreground">
                               {p.phone}
                             </span>
+                            {p.was_school_student !== null && p.was_school_student !== undefined && <><br /><span className="text-xs text-muted-foreground">Студент школы: {p.was_school_student ? "да" : "нет"}</span></>}
                           </td>
                           <td className="py-3">
                             {p.telegram_name ? `@${p.telegram_name}` : "—"}
@@ -962,6 +963,7 @@ function App() {
                       <tr className="border-b text-left text-muted-foreground">
                         <th className="p-4">Гость</th>
                         <th className="p-4">Telegram</th>
+                        <th className="p-4">Школа</th>
                         <th className="p-4">Событий</th>
                         <th className="p-4">Последняя заявка</th>
                       </tr>
@@ -982,6 +984,7 @@ function App() {
                           <td className="p-4">
                             {g.telegram_name ? `@${g.telegram_name}` : "—"}
                           </td>
+                          <td className="p-4">{g.was_school_student === null || g.was_school_student === undefined ? "—" : g.was_school_student ? "Да" : "Нет"}</td>
                           <td className="p-4">{g.events_count}</td>
                           <td className="p-4 text-muted-foreground">
                             {fmt(g.last_seen)}
