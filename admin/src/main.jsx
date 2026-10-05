@@ -322,6 +322,11 @@ function editorHtml(value = "") {
     if (next === source) break;
     source = next;
   }
+  // Earlier versions saved Telegram newlines instead of editor blocks. Turn
+  // those old values back into visible paragraphs on the next edit.
+  if (!/<(?:p|div|br)\b/i.test(source) && /\n/.test(source)) {
+    source = `<p>${source.replace(/\n/g, "<br>")}</p>`;
+  }
   const template = document.createElement("template");
   template.innerHTML = source;
   const allowed = new Set(["P", "DIV", "BR", "B", "STRONG", "I", "EM", "U", "S", "STRIKE", "DEL", "A"]);

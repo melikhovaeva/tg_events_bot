@@ -24,6 +24,34 @@ function decodeEditorEntities(value) {
   return decoded;
 }
 
+// Keep the source produced by the admin rich-text editor separate from the
+// HTML reduced for Telegram. In particular, Telegram only needs newlines,
+// while the editor needs paragraph tags to render spacing when it is reopened.
+export const richTextHtml = (value = '') => {
+  let source = decodeEditorEntities(value).replace(/\r\n|\r/g, '\n');
+  const hasBlocks = /<(?:p|div|br)\b/i.test(source);
+  if (!hasBlocks && source.trim()) source = `<p>${source}</p>`;
+
+  return source.split(/(<[^>]*>)/g).map((part) => {
+    if (/^<(p|div)(?:\s[^>]*)?>$/i.test(part)) return '<p>';
+    if (/^<\/(p|div)>$/i.test(part)) return '</p>';
+    if (/^<br\s*\/?\s*>$/i.test(part)) return '<br>';
+    if (/^<(b|strong)(?:\s[^>]*)?>$/i.test(part)) return '<b>';
+    if (/^<\/(b|strong)>$/i.test(part)) return '</b>';
+    if (/^<(i|em)(?:\s[^>]*)?>$/i.test(part)) return '<i>';
+    if (/^<\/(i|em)>$/i.test(part)) return '</i>';
+    if (/^<u(?:\s[^>]*)?>$/i.test(part)) return '<u>';
+    if (/^<\/u>$/i.test(part)) return '</u>';
+    if (/^<(s|strike|del)(?:\s[^>]*)?>$/i.test(part)) return '<s>';
+    if (/^<\/(s|strike|del)>$/i.test(part)) return '</s>';
+    if (/^<\/a>$/i.test(part)) return '</a>';
+    const link = part.match(/^<a\s+[^>]*href=["'](https?:\/\/[^"'<>\s]+|tg:\/\/[^"'<>\s]+)["'][^>]*>$/i);
+    if (link) return `<a href="${esc(link[1])}">`;
+    if (/^<[^>]*>$/.test(part)) return esc(part);
+    return esc(part).replace(/\n/g, '<br>');
+  }).join('');
+};
+
 export const telegramHtml = (value = '') => {
   // Old pasted content may have been entity-escaped several times. Restore it
   // before reducing it to the small, safe HTML subset supported by Telegram.

@@ -11,7 +11,7 @@ import { agreementUrl, policyUrl, validateConfig } from './lib/config.js';
 import { createDatabaseBackup, millisecondsUntilNextMoscowBackup } from './lib/backup.js';
 import { loginPage } from './lib/login-page.js';
 import { backupsDir, dbPath, ensureDataDirectories, uploadsDir } from './lib/paths.js';
-import { defaultText, esc, eventText, messageOptions, nowIso, telegramHtml, token } from './lib/text.js';
+import { defaultText, esc, eventText, messageOptions, nowIso, richTextHtml, telegramHtml, token } from './lib/text.js';
 import { createInvitationService } from './services/invitations.js';
 
 validateConfig();
@@ -558,7 +558,7 @@ app.post('/admin/events/:id/settings', adminOnly, (req, res) => {
 });
 app.post('/api/admin/events/:id/texts', adminOnly, (req, res) => {
   db.prepare('UPDATE events SET description=?, invite_text=?, expired_text=?, confirmed_text=?, reminder_text=?, declined_text=? WHERE id=?')
-    .run(telegramHtml(req.body.description || '') || null, telegramHtml(req.body.invite_text || '') || null, telegramHtml(req.body.expired_text || '') || null, telegramHtml(req.body.confirmed_text || '') || null, telegramHtml(req.body.reminder_text || '') || null, telegramHtml(req.body.declined_text || '') || null, req.params.id);
+    .run(richTextHtml(req.body.description || '') || null, richTextHtml(req.body.invite_text || '') || null, richTextHtml(req.body.expired_text || '') || null, richTextHtml(req.body.confirmed_text || '') || null, richTextHtml(req.body.reminder_text || '') || null, richTextHtml(req.body.declined_text || '') || null, req.params.id);
   res.json({ ok: true });
 });
 app.post('/api/admin/events/:id/registration', adminOnly, (req, res) => {
@@ -655,7 +655,7 @@ app.post('/api/admin/events/:id', adminOnly, (req, res) => {
   const startsAt = new Date(req.body.starts_at);
   if (!title || Number.isNaN(startsAt.getTime())) return res.status(400).json({ error: 'Укажите название и дату мероприятия' });
   const result = db.prepare('UPDATE events SET title=?, starts_at=?, description=?, venue=?, chat_url=? WHERE id=?')
-    .run(title, startsAt.toISOString(), telegramHtml(req.body.description || '') || null, String(req.body.venue || '').trim() || null, String(req.body.chat_url || '').trim() || null, req.params.id);
+    .run(title, startsAt.toISOString(), richTextHtml(req.body.description || '') || null, String(req.body.venue || '').trim() || null, String(req.body.chat_url || '').trim() || null, req.params.id);
   if (!result.changes) return res.sendStatus(404);
   res.json({ ok: true });
 });
@@ -689,7 +689,7 @@ app.post('/api/admin/posts', adminOnly, (req, res) => {
   const audience = ['all', 'event', 'manual'].includes(req.body.audience) ? req.body.audience : 'all';
   const eventId = audience === 'event' && Number(req.body.event_id) ? Number(req.body.event_id) : null;
   const result = db.prepare('INSERT INTO posts (title,content,audience,event_id,updated_at) VALUES (?,?,?,?,?)')
-    .run(title, telegramHtml(req.body.content || ''), audience, eventId, nowIso());
+    .run(title, richTextHtml(req.body.content || ''), audience, eventId, nowIso());
   res.json({ ok: true, id: Number(result.lastInsertRowid) });
 });
 app.post('/api/admin/posts/:id', adminOnly, (req, res) => {
@@ -698,7 +698,7 @@ app.post('/api/admin/posts/:id', adminOnly, (req, res) => {
   const audience = ['all', 'event', 'manual'].includes(req.body.audience) ? req.body.audience : 'all';
   const eventId = audience === 'event' && Number(req.body.event_id) ? Number(req.body.event_id) : null;
   const result = db.prepare('UPDATE posts SET title=?, content=?, audience=?, event_id=?, updated_at=? WHERE id=?')
-    .run(title, telegramHtml(req.body.content || ''), audience, eventId, nowIso(), req.params.id);
+    .run(title, richTextHtml(req.body.content || ''), audience, eventId, nowIso(), req.params.id);
   if (!result.changes) return res.sendStatus(404);
   res.json({ ok: true, id: Number(req.params.id) });
 });
