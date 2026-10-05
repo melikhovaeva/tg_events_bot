@@ -201,10 +201,6 @@ async function requestSchoolStatus(ctx, continuation, profile) {
   const keyboard = new InlineKeyboard().text('Да', 'school:yes').text('Нет', 'school:no');
   return ctx.reply('Подскажите, пожалуйста: вы были студентом школы Perasperadastra?', { reply_markup: keyboard });
 }
-async function editApplicationMessage(ctx, text) {
-  if (ctx.callbackQuery?.message?.photo) return ctx.editMessageCaption(text, messageOptions());
-  return ctx.editMessageText(text, messageOptions());
-}
 async function continueStart(ctx, claim) {
   const profile = db.prepare('SELECT * FROM telegram_profiles WHERE telegram_id=?').get(String(ctx.from.id));
   if (!profile) return requestProfile(ctx, claim);
@@ -309,7 +305,9 @@ bot.callbackQuery(/^apply:(\d+)$/, async ctx => {
   else db.prepare('INSERT INTO applicants (event_id,name,phone,was_school_student,claim_token,telegram_id,telegram_name,status) VALUES (?,?,?,?,?,?,?,?)')
     .run(event.id, profile.name, profile.phone, profile.was_school_student, token(), telegramId, ctx.from.username || null, 'awaiting_review');
   await ctx.answerCallbackQuery({ text: 'Регистрация принята' });
-  return editApplicationMessage(ctx, eventText(event, 'received'));
+  // An event card may include a separate image album. Do not replace the
+  // card's text after a click: send the resulting status as a new message.
+  return ctx.reply(eventText(event, 'received'), messageOptions({ reply_markup: mainKeyboard() }));
 });
 
 bot.on('message:contact', async ctx => {
