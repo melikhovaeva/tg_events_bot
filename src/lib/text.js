@@ -18,9 +18,10 @@ export const telegramHtml = (value = '') => {
   // Earlier versions escaped pasted rich text with attributes (for example
   // "<p style=…>") into visible text. Decode only recognised editor tags so
   // existing announcements become editable again.
-  const valueWithDecodedTags = /&lt;\/?(?:p|div|b|strong|i|em|u|s|strike|del|a)\b/i.test(raw)
+  let valueWithDecodedTags = /&lt;\/?(?:p|div|b|strong|i|em|u|s|strike|del|a)\b/i.test(raw)
     ? raw.replace(/&lt;/gi, '<').replace(/&gt;/gi, '>')
     : raw;
+  while (/&amp;nbsp;/i.test(valueWithDecodedTags)) valueWithDecodedTags = valueWithDecodedTags.replace(/&amp;nbsp;/gi, '&nbsp;');
   return valueWithDecodedTags
   .replace(/&nbsp;/gi, ' ')
   .replace(/<br\s*\/?\s*>/gi, '\n')
