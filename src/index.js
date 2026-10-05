@@ -153,13 +153,16 @@ const adminOnly = (req, res, next) => {
 };
 
 const bot = new Bot(process.env.BOT_TOKEN || '');
+const botEnabled = Boolean(process.env.BOT_TOKEN) && process.env.BOT_ENABLED !== 'false';
 const { runAutomation, sendAssets, sendInvite, sendMessageImages, updateInviteAttempt } = createInvitationService({ db, bot });
 bot.catch((error) => console.error('Ошибка обработки сообщения Telegram:', error.error || error));
-bot.api.setMyCommands([
-  { command: 'events', description: 'Посмотреть мероприятия' },
-  { command: 'my', description: 'Мои регистрации' },
-  { command: 'help', description: 'Помощь' },
-]).catch(console.error);
+if (botEnabled) {
+  bot.api.setMyCommands([
+    { command: 'events', description: 'Посмотреть мероприятия' },
+    { command: 'my', description: 'Мои регистрации' },
+    { command: 'help', description: 'Помощь' },
+  ]).catch(console.error);
+}
 bot.use(async (ctx, next) => {
   const telegramId = ctx.from?.id ? String(ctx.from.id) : null;
   if (!telegramId || !db.prepare('SELECT 1 FROM blocked_users WHERE telegram_id=?').get(telegramId)) return next();
@@ -769,8 +772,16 @@ function layout(title, body) { return `<!doctype html><html lang="ru"><meta char
 
 const port = Number(process.env.PORT || 3000);
 const server = app.listen(port, () => console.log(`Admin: http://localhost:${port}/admin`));
-if (process.env.BOT_TOKEN) {
-  bot.start().catch(error => console.error('Telegram bot did not start:', error.message));
+function startBot() {
+  bot.start().catch((error) => {
+    console.error('Telegram bot did not start:', error.message);
+    // A second temporary instance can cause Telegram's 409 conflict. Retrying
+    // keeps production self-healing once that instance is gone.
+    setTimeout(startBot, 30_000).unref();
+  });
+}
+if (botEnabled) {
+  startBot();
   setInterval(() => runAutomation().catch(console.error), 60_000);
   runAutomation().catch(console.error);
 }
