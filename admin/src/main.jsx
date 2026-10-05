@@ -314,6 +314,31 @@ const textPosts = [
 
 const plainText = (html = "") => html.replace(/<br\s*\/?>/gi, " ").replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ");
 
+function editorHtml(value = "") {
+  const raw = String(value);
+  const source = /&lt;\/?(?:p|div|b|strong|i|em|u|s|strike|del|a)\b/i.test(raw)
+    ? raw.replace(/&lt;/gi, "<").replace(/&gt;/gi, ">")
+    : raw;
+  const template = document.createElement("template");
+  template.innerHTML = source;
+  const allowed = new Set(["P", "DIV", "BR", "B", "STRONG", "I", "EM", "U", "S", "STRIKE", "DEL", "A"]);
+  template.content.querySelectorAll("script,style,iframe,object,embed").forEach((element) => element.remove());
+  template.content.querySelectorAll("*").forEach((element) => {
+    if (!allowed.has(element.tagName)) {
+      element.replaceWith(...Array.from(element.childNodes));
+      return;
+    }
+    if (element.tagName === "A") {
+      const href = element.getAttribute("href") || "";
+      if (!/^https?:\/\//i.test(href)) element.removeAttribute("href");
+      [...element.attributes].forEach((attribute) => { if (attribute.name !== "href") element.removeAttribute(attribute.name); });
+      return;
+    }
+    [...element.attributes].forEach((attribute) => element.removeAttribute(attribute.name));
+  });
+  return template.innerHTML;
+}
+
 function EventTexts({ event, messageImages = [], onEdit }) {
   return <div className="mt-7 grid max-w-3xl gap-3">
     {textPosts.map((post) => {
@@ -341,7 +366,10 @@ function RichTextEditor({ value, onChange, placeholder }) {
   const [linkOpen, setLinkOpen] = useState(false);
   const [linkUrl, setLinkUrl] = useState("");
   const [linkError, setLinkError] = useState("");
-  useEffect(() => { if (ref.current && ref.current.innerHTML !== value) ref.current.innerHTML = value; }, [value]);
+  useEffect(() => {
+    const normalized = editorHtml(value);
+    if (ref.current && ref.current.innerHTML !== normalized) ref.current.innerHTML = normalized;
+  }, [value]);
   const preserve = (event) => event.preventDefault();
   const command = (name, arg = null) => { ref.current?.focus(); document.execCommand(name, false, arg); onChange(ref.current?.innerHTML || ""); };
   const openLink = () => {

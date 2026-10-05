@@ -13,25 +13,35 @@ export const defaultText = {
   reminder: 'Напоминаем: «{event}» уже завтра. Ждём вас!',
 };
 
-export const telegramHtml = (value = '') => String(value)
+export const telegramHtml = (value = '') => {
+  const raw = String(value);
+  // Earlier versions escaped pasted rich text with attributes (for example
+  // "<p style=…>") into visible text. Decode only recognised editor tags so
+  // existing announcements become editable again.
+  const valueWithDecodedTags = /&lt;\/?(?:p|div|b|strong|i|em|u|s|strike|del|a)\b/i.test(raw)
+    ? raw.replace(/&lt;/gi, '<').replace(/&gt;/gi, '>')
+    : raw;
+  return valueWithDecodedTags
+  .replace(/&nbsp;/gi, ' ')
   .replace(/<br\s*\/?\s*>/gi, '\n')
   .replace(/\r\n|\r/g, '\n')
   .split(/(<[^>]*>)/g)
   .map((part) => {
-    if (/^<\/?(div|p)>$/i.test(part)) return '\n';
+    if (/^<\/?(div|p)(?:\s[^>]*)?>$/i.test(part)) return '\n';
     if (/^<\/(b|strong)>$/i.test(part)) return '</b>';
     if (/^<\/(i|em)>$/i.test(part)) return '</i>';
     if (/^<\/u>$/i.test(part)) return '</u>';
     if (/^<\/(s|strike|del)>$/i.test(part)) return '</s>';
     if (/^<\/(a)>$/i.test(part)) return '</a>';
-    if (/^<(b|strong)>$/i.test(part)) return '<b>';
-    if (/^<(i|em)>$/i.test(part)) return '<i>';
-    if (/^<u>$/i.test(part)) return '<u>';
-    if (/^<(s|strike|del)>$/i.test(part)) return '<s>';
-    const link = part.match(/^<a\s+href=["'](https?:\/\/[^"'<>\s]+|tg:\/\/[^"'<>\s]+)["']\s*>$/i);
+    if (/^<(b|strong)(?:\s[^>]*)?>$/i.test(part)) return '<b>';
+    if (/^<(i|em)(?:\s[^>]*)?>$/i.test(part)) return '<i>';
+    if (/^<u(?:\s[^>]*)?>$/i.test(part)) return '<u>';
+    if (/^<(s|strike|del)(?:\s[^>]*)?>$/i.test(part)) return '<s>';
+    const link = part.match(/^<a\s+[^>]*href=["'](https?:\/\/[^"'<>\s]+|tg:\/\/[^"'<>\s]+)["'][^>]*>$/i);
     return link ? `<a href="${esc(link[1])}">` : esc(part);
   }).join('')
   .replace(/\n{3,}/g, '\n\n');
+};
 
 export const eventText = (event, key) => telegramHtml((event[`${key}_text`] || defaultText[key]).replaceAll('{event}', event.title));
 export const messageOptions = (options) => ({ parse_mode: 'HTML', ...options });
