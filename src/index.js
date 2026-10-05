@@ -102,6 +102,9 @@ CREATE TABLE IF NOT EXISTS post_files (
   id INTEGER PRIMARY KEY, post_id INTEGER NOT NULL REFERENCES posts(id), original_name TEXT NOT NULL,
   stored_name TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS admin_sessions (
+  id TEXT PRIMARY KEY, expires_at INTEGER NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 `);
 for (const [table, column, definition] of [
   ['events', 'description', 'TEXT'], ['events', 'venue', 'TEXT'], ['applicants', 'phone', 'TEXT'],
@@ -130,8 +133,7 @@ function recordConversationMessage(telegramId, telegramName, direction, text) {
     ON CONFLICT(telegram_id) DO UPDATE SET telegram_name=excluded.telegram_name,last_message=excluded.last_message,last_message_at=excluded.last_message_at,unread_count=${direction === 'in' ? 'conversations.unread_count+1' : '0'}`)
     .run(telegramId, telegramName || null, text, createdAt, unreadCount);
 }
-const adminSessions = new Map();
-const sessionDurationMs = 7 * 24 * 60 * 60 * 1000;
+const sessionDurationMs = 30 * 24 * 60 * 60 * 1000;
 function readCookie(req, name) {
   const pair = (req.headers.cookie || '').split(';').map(part => part.trim()).find(part => part.startsWith(`${name}=`));
   return pair ? decodeURIComponent(pair.slice(name.length + 1)) : null;
@@ -143,8 +145,12 @@ function sameSecret(value, secret) {
 }
 function isAdmin(req) {
   const id = readCookie(req, 'event_ops_session');
-  const expiresAt = id && adminSessions.get(id);
-  if (!expiresAt || expiresAt <= Date.now()) { if (id) adminSessions.delete(id); return false; }
+  if (!id) return false;
+  const session = db.prepare('SELECT expires_at FROM admin_sessions WHERE id=?').get(id);
+  if (!session || session.expires_at <= Date.now()) {
+    db.prepare('DELETE FROM admin_sessions WHERE id=?').run(id);
+    return false;
+  }
   return true;
 }
 const adminOnly = (req, res, next) => {
@@ -452,13 +458,14 @@ app.get('/login/form', (req, res) => res.type('html').send(loginPage(req.query.e
 app.post('/login', (req, res) => {
   if (!sameSecret(req.body.password, process.env.ADMIN_PASSWORD)) return res.redirect('/login/form?error=1');
   const sessionId = crypto.randomBytes(32).toString('base64url');
-  adminSessions.set(sessionId, Date.now() + sessionDurationMs);
+  db.prepare('DELETE FROM admin_sessions WHERE expires_at <= ?').run(Date.now());
+  db.prepare('INSERT INTO admin_sessions (id,expires_at) VALUES (?,?)').run(sessionId, Date.now() + sessionDurationMs);
   res.set('Set-Cookie', `event_ops_session=${sessionId}; Max-Age=${sessionDurationMs / 1000}; Path=/; HttpOnly; SameSite=Lax${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`);
   return res.redirect('/admin');
 });
 app.post('/logout', (req, res) => {
   const sessionId = readCookie(req, 'event_ops_session');
-  if (sessionId) adminSessions.delete(sessionId);
+  if (sessionId) db.prepare('DELETE FROM admin_sessions WHERE id=?').run(sessionId);
   res.set('Set-Cookie', 'event_ops_session=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax');
   res.redirect('/login/form');
 });
