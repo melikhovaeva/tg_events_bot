@@ -144,7 +144,7 @@ function recordConversationMessage(telegramId, telegramName, direction, text) {
   db.prepare('INSERT INTO conversation_messages (telegram_id,direction,text,created_at) VALUES (?,?,?,?)').run(telegramId, direction, text, createdAt);
   const unreadCount = direction === 'in' ? 1 : 0;
   db.prepare(`INSERT INTO conversations (telegram_id,telegram_name,last_message,last_message_at,unread_count) VALUES (?,?,?,?,?)
-    ON CONFLICT(telegram_id) DO UPDATE SET telegram_name=excluded.telegram_name,last_message=excluded.last_message,last_message_at=excluded.last_message_at,unread_count=${direction === 'in' ? 'conversations.unread_count+1' : '0'}`)
+    ON CONFLICT(telegram_id) DO UPDATE SET telegram_name=COALESCE(excluded.telegram_name, conversations.telegram_name),last_message=excluded.last_message,last_message_at=excluded.last_message_at,unread_count=${direction === 'in' ? 'conversations.unread_count+1' : 'conversations.unread_count'}`)
     .run(telegramId, telegramName || null, text, createdAt, unreadCount);
 }
 function ensureConversationsForBotUsers() {
@@ -207,6 +207,19 @@ const adminOnly = (req, res, next) => {
 const bot = new Bot(process.env.BOT_TOKEN || '');
 const botEnabled = Boolean(process.env.BOT_TOKEN) && process.env.BOT_ENABLED !== 'false';
 const { runAutomation, sendAssets, sendInvite, sendMessageImages, updateInviteAttempt } = createInvitationService({ db, bot });
+const transcriptForApiCall = (method, payload) => {
+  if (method === 'sendMessage') return payload.text;
+  if (method === 'sendPhoto') return payload.caption || '🖼 Изображение';
+  if (method === 'sendDocument') return payload.caption || '📎 Файл';
+  if (method === 'sendMediaGroup') return `🖼 Изображения: ${Array.isArray(payload.media) ? payload.media.length : 1}`;
+  return null;
+};
+bot.api.config.use(async (prev, method, payload, signal) => {
+  const result = await prev(method, payload, signal);
+  const text = transcriptForApiCall(method, payload);
+  if (text && payload.chat_id) recordConversationMessage(String(payload.chat_id), null, 'out', text);
+  return result;
+});
 bot.catch((error) => console.error('Ошибка обработки сообщения Telegram:', error.error || error));
 if (botEnabled) {
   bot.api.setMyCommands([
@@ -220,6 +233,15 @@ bot.use(async (ctx, next) => {
   if (!telegramId || !db.prepare('SELECT 1 FROM blocked_users WHERE telegram_id=?').get(telegramId)) return next();
   if (ctx.callbackQuery) await ctx.answerCallbackQuery({ text: 'Доступ к боту ограничен.', show_alert: true });
   else if (ctx.chat) await ctx.reply('Доступ к этому боту ограничен.');
+});
+bot.use(async (ctx, next) => {
+  const telegramId = ctx.from?.id ? String(ctx.from.id) : null;
+  const message = ctx.message;
+  if (telegramId && message) {
+    const text = message.text || message.caption || (message.contact ? '📱 Отправил номер телефона' : message.photo ? '🖼 Отправил изображение' : message.document ? '📎 Отправил файл' : null);
+    if (text) recordConversationMessage(telegramId, ctx.from?.username || null, 'in', text);
+  }
+  return next();
 });
 async function requestProfile(ctx, continuation = '') {
   const telegramId = String(ctx.from.id);
@@ -393,7 +415,6 @@ bot.on('message:text', async ctx => {
     }
     if (!text.startsWith('/')) {
       const support = db.prepare('SELECT 1 FROM support_drafts WHERE telegram_id=?').get(telegramId);
-      recordConversationMessage(telegramId, ctx.from.username, 'in', text);
       if (support) {
         db.prepare('DELETE FROM support_drafts WHERE telegram_id=?').run(telegramId);
         return ctx.reply('Спасибо, сообщение передано команде. Ответ придёт сюда.', { reply_markup: mainKeyboard() });
@@ -680,7 +701,6 @@ app.post('/api/admin/dialogs/:telegramId/reply', adminOnly, async (req, res) => 
   if (db.prepare('SELECT 1 FROM blocked_users WHERE telegram_id=?').get(conversation.telegram_id)) return res.status(400).json({ error: 'Доступ гостя к боту ограничен' });
   try { await bot.api.sendMessage(conversation.telegram_id, text, messageOptions()); }
   catch (error) { return res.status(400).json({ error: `Не удалось отправить: ${error.message}` }); }
-  recordConversationMessage(conversation.telegram_id, conversation.telegram_name, 'out', text);
   res.json({ ok: true });
 });
 app.post('/api/admin/events/:id', adminOnly, (req, res) => {
