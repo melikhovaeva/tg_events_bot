@@ -798,6 +798,41 @@ app.delete('/api/admin/post-files/:id', adminOnly, (req, res) => {
   if (!file) return res.sendStatus(404);
   db.prepare('DELETE FROM post_files WHERE id=?').run(file.id); fs.unlink(path.join(uploadsDir, file.stored_name), () => {}); res.json({ ok: true });
 });
+app.post('/api/admin/posts/:id/send', adminOnly, async (req, res) => {
+  const post = db.prepare('SELECT * FROM posts WHERE id=?').get(req.params.id);
+  if (!post) return res.sendStatus(404);
+  ensureConversationsForBotUsers();
+  let recipients = [];
+  if (post.audience === 'event' && post.event_id) {
+    recipients = db.prepare(`SELECT DISTINCT a.telegram_id FROM applicants a
+      WHERE a.event_id=? AND a.telegram_id IS NOT NULL
+      AND NOT EXISTS(SELECT 1 FROM blocked_users b WHERE b.telegram_id=a.telegram_id)`).all(post.event_id);
+  } else if (post.audience === 'all') {
+    recipients = db.prepare(`SELECT c.telegram_id FROM conversations c
+      WHERE NOT EXISTS(SELECT 1 FROM blocked_users b WHERE b.telegram_id=c.telegram_id)`).all();
+  } else {
+    return res.status(400).json({ error: 'Для ручной аудитории пока выберите гостей в карточке поста' });
+  }
+  if (!recipients.length) return res.status(400).json({ error: 'В выбранной аудитории пока нет доступных пользователей' });
+  const images = db.prepare('SELECT * FROM post_images WHERE post_id=? ORDER BY position').all(post.id);
+  const files = db.prepare('SELECT * FROM post_files WHERE post_id=? ORDER BY created_at').all(post.id);
+  const text = telegramHtml(post.content || '');
+  if (!text && !images.length && !files.length) return res.status(400).json({ error: 'Добавьте текст, изображение или файл перед отправкой' });
+  const sent = [];
+  const skipped = [];
+  for (const { telegram_id: telegramId } of recipients) {
+    try {
+      if (text) await bot.api.sendMessage(telegramId, text, messageOptions());
+      if (images.length) await bot.api.sendMediaGroup(telegramId, images.map((image) => ({ type: 'photo', media: new InputFile(path.join(uploadsDir, image.stored_name), image.original_name) })));
+      for (const file of files) await bot.api.sendDocument(telegramId, new InputFile(path.join(uploadsDir, file.stored_name), file.original_name));
+      sent.push(telegramId);
+      if (sent.length < recipients.length) await new Promise((resolve) => setTimeout(resolve, 60));
+    } catch (error) {
+      skipped.push({ telegramId, reason: error.description || error.message || 'не удалось отправить' });
+    }
+  }
+  res.json({ ok: true, sent: sent.length, skipped });
+});
 app.post('/api/admin/events/:id/message-images/:key', adminOnly, upload.array('images', 9), (req, res) => {
   const messageKeys = new Set(['registration', 'invite', 'expired', 'confirmed', 'declined', 'reminder']);
   if (!messageKeys.has(req.params.key)) return res.status(400).json({ error: 'Неизвестный тип сообщения' });

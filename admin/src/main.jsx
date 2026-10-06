@@ -293,7 +293,7 @@ function ConfirmDialog({ item, onClose }) {
   const [working, setWorking] = useState(false);
   if (!item) return null;
   const confirm = async () => { setWorking(true); try { await item.action(); onClose(); } finally { setWorking(false); } };
-  return <Dialog open={Boolean(item)} onOpenChange={(open) => !open && onClose()}><DialogContent className="max-w-md"><DialogHeader><DialogTitle>{item.title}</DialogTitle><DialogDescription>{item.description}</DialogDescription></DialogHeader><div className="flex justify-end gap-2"><Button variant="outline" onClick={onClose}>Отмена</Button><Button className="bg-destructive text-white hover:bg-destructive/90" onClick={confirm} disabled={working}>{working ? "Удаляем…" : item.confirmLabel || "Удалить"}</Button></div></DialogContent></Dialog>;
+  return <Dialog open={Boolean(item)} onOpenChange={(open) => !open && onClose()}><DialogContent className="max-w-md"><DialogHeader><DialogTitle>{item.title}</DialogTitle><DialogDescription>{item.description}</DialogDescription></DialogHeader><div className="flex justify-end gap-2"><Button variant="outline" onClick={onClose}>Отмена</Button><Button variant={item.destructive ? "destructive" : "default"} onClick={confirm} disabled={working}>{working ? item.workingLabel || "Сохраняем…" : item.confirmLabel || "Подтвердить"}</Button></div></DialogContent></Dialog>;
 }
 function Stat({ label, value }) {
   return (
@@ -721,6 +721,20 @@ function App() {
       await load(event.id);
     },
   });
+  const sendPost = (post) => setConfirm({
+    title: `Отправить пост «${post.title}»?`,
+    description: post.audience === "all" ? "Сообщение уйдёт всем доступным пользователям, которые запустили бота." : post.audience === "event" ? "Сообщение уйдёт всем доступным гостям выбранного мероприятия." : "Для ручной аудитории сначала нужно выбрать получателей.",
+    confirmLabel: "Отправить",
+    workingLabel: "Отправляем…",
+    action: async () => {
+      try {
+        const response = await request(`/api/admin/posts/${post.id}/send`, { method: "POST" });
+        const result = await response.json();
+        setNotice(`Пост отправлен: ${result.sent}${result.skipped.length ? `. Не доставлено: ${result.skipped.length}` : ""}.`);
+        window.setTimeout(() => setNotice(""), 5000);
+      } catch (e) { setError(e.message); }
+    },
+  });
   const setRegistration = async (open) => {
     await request(`/api/admin/events/${event.id}/registration`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ open }) });
     await load(event.id);
@@ -729,6 +743,7 @@ function App() {
     title: "Удалить регистрацию?",
     description: `${person.name} будет удалён из списка гостей этого мероприятия. Это действие нельзя отменить.`,
     confirmLabel: "Удалить регистрацию",
+    destructive: true,
     action: async () => { await request(`/api/admin/applicants/${person.id}`, { method: "DELETE" }); await load(event.id); },
   });
   const toggleBlock = async (person) => {
@@ -739,6 +754,7 @@ function App() {
     title: "Удалить мероприятие?",
     description: `Будут удалены «${event.title}», все заявки, приглашения и материалы. Это действие нельзя отменить.`,
     confirmLabel: "Удалить мероприятие",
+    destructive: true,
     action: async () => { await request(`/api/admin/events/${event.id}`, { method: "DELETE" }); await load(); setPage("events"); },
   });
   const copy = async () => {
@@ -1013,7 +1029,7 @@ function App() {
           {page === "posts" && (
             <>
               <div className="flex flex-wrap items-end justify-between gap-3"><div><h1 className="text-3xl font-semibold tracking-tight">Посты</h1><p className="mt-2 text-muted-foreground">Сохранённые черновики можно открыть, поправить и использовать повторно.</p></div><Button onClick={() => { setActiveBroadcast(null); setPage("postEditor"); }}><Plus size={16} />Новый пост</Button></div>
-              <div className="mt-7 grid max-w-3xl gap-3">{state.posts.length ? state.posts.map((post) => { const images = (state.postImages || []).filter((image) => image.post_id === post.id); const files = (state.postFiles || []).filter((file) => file.post_id === post.id); return <Card key={post.id}><CardContent className="flex items-start justify-between gap-4 p-4 sm:p-5"><div className="min-w-0"><h2 className="font-semibold">{post.title}</h2><p className="mt-1 line-clamp-2 text-sm leading-6 text-muted-foreground">{plainText(post.content) || "Текст пока не добавлен"}</p>{!!images.length && <div className="mt-3 flex -space-x-1.5">{images.slice(0, 5).map((image) => <img key={image.id} src={`/api/admin/post-images/${image.id}`} className="h-8 w-8 rounded-md border-2 border-background object-cover" />)}{images.length > 5 && <span className="flex h-8 w-8 items-center justify-center rounded-md border-2 border-background bg-muted text-xs">+{images.length - 5}</span>}</div>}<p className="mt-3 text-xs text-muted-foreground">{post.audience === "all" ? "Все в боте" : post.audience === "event" ? `Гости: ${post.event_title || "мероприятие не выбрано"}` : "Гости выбраны вручную"}{files.length ? ` · файлов: ${files.length}` : ""} · изменён {fmt(post.updated_at)}</p></div><Button variant="secondary" size="sm" onClick={() => { setActiveBroadcast(post.id); setPage("postEditor"); }}><Pencil size={14} />Редактировать</Button></CardContent></Card>; }) : <Card><CardContent className="p-6 text-sm text-muted-foreground">Постов пока нет. Создайте первый, чтобы сохранить его для будущих рассылок.</CardContent></Card>}</div>
+              <div className="mt-7 grid max-w-3xl gap-3">{state.posts.length ? state.posts.map((post) => { const images = (state.postImages || []).filter((image) => image.post_id === post.id); const files = (state.postFiles || []).filter((file) => file.post_id === post.id); return <Card key={post.id}><CardContent className="flex items-start justify-between gap-4 p-4 sm:p-5"><div className="min-w-0"><h2 className="font-semibold">{post.title}</h2><p className="mt-1 line-clamp-2 text-sm leading-6 text-muted-foreground">{plainText(post.content) || "Текст пока не добавлен"}</p>{!!images.length && <div className="mt-3 flex -space-x-1.5">{images.slice(0, 5).map((image) => <img key={image.id} src={`/api/admin/post-images/${image.id}`} className="h-8 w-8 rounded-md border-2 border-background object-cover" />)}{images.length > 5 && <span className="flex h-8 w-8 items-center justify-center rounded-md border-2 border-background bg-muted text-xs">+{images.length - 5}</span>}</div>}<p className="mt-3 text-xs text-muted-foreground">{post.audience === "all" ? "Все в боте" : post.audience === "event" ? `Гости: ${post.event_title || "мероприятие не выбрано"}` : "Гости выбраны вручную"}{files.length ? ` · файлов: ${files.length}` : ""} · изменён {fmt(post.updated_at)}</p></div><div className="flex shrink-0 gap-2"><Button size="sm" onClick={() => sendPost(post)}><Send size={14} />Отправить</Button><Button variant="secondary" size="sm" onClick={() => { setActiveBroadcast(post.id); setPage("postEditor"); }}><Pencil size={14} />Редактировать</Button></div></CardContent></Card>; }) : <Card><CardContent className="p-6 text-sm text-muted-foreground">Постов пока нет. Создайте первый, чтобы сохранить его для будущих рассылок.</CardContent></Card>}</div>
             </>
           )}
           {page === "dialogs" && <Dialogs conversations={state.conversations || []} activeId={activeDialog} conversation={dialog} messages={dialogMessages} onOpen={loadDialog} onSend={async (text) => { await request(`/api/admin/dialogs/${encodeURIComponent(activeDialog)}/reply`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) }); await loadDialog(activeDialog); }} />}
