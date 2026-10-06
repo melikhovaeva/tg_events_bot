@@ -529,7 +529,17 @@ function PostEditor({ post, events, postImages, postFiles, onSaved, onBack }) {
       const currentFileIds = files.filter((file) => file.serverId).map((file) => file.serverId);
       await Promise.all(originalFileIds.filter((id) => !currentFileIds.includes(id)).map((id) => request(`/api/admin/post-files/${id}`, { method: "DELETE" })));
       const newFiles = files.filter((file) => file.file);
-      if (newFiles.length) { const body = new FormData(); newFiles.forEach((file) => body.append("files", file.file)); await request(`/api/admin/posts/${postId}/files`, { method: "POST", body }); }
+      if (newFiles.length) {
+        const body = new FormData();
+        newFiles.forEach((file) => body.append("files", file.file));
+        const uploaded = (await (await request(`/api/admin/posts/${postId}/files`, { method: "POST", body })).json()).files;
+        let index = 0;
+        setFiles((current) => current.map((file) => {
+          if (!file.file) return file;
+          const savedFile = uploaded[index++];
+          return { id: savedFile.id, serverId: savedFile.id, name: savedFile.original_name, url: `/api/admin/post-files/${savedFile.id}` };
+        }));
+      }
       await onSaved(postId); setSaved(true);
     } catch (e) { setError(e.message); }
     finally { setSaving(false); }

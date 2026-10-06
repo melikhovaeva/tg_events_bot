@@ -786,6 +786,8 @@ app.post('/api/admin/posts/:id/files', adminOnly, upload.array('files', 10), (re
   const post = db.prepare('SELECT id FROM posts WHERE id=?').get(req.params.id);
   if (!post) return res.sendStatus(404);
   const files = req.files || [];
+  if (!files.length) return res.status(400).json({ error: 'Выберите хотя бы один файл' });
+  if (files.length > 10) return res.status(400).json({ error: 'К одному посту можно прикрепить до 10 файлов' });
   const insert = db.prepare('INSERT INTO post_files (post_id,original_name,stored_name) VALUES (?,?,?)');
   const saved = files.map(file => ({ id: Number(insert.run(post.id, file.originalname, file.filename).lastInsertRowid), original_name: file.originalname }));
   res.json({ ok: true, files: saved });
