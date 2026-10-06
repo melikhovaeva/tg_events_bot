@@ -105,6 +105,16 @@ CREATE TABLE IF NOT EXISTS post_files (
 CREATE TABLE IF NOT EXISTS admin_sessions (
   id TEXT PRIMARY KEY, expires_at INTEGER NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS admin_users (
+  id INTEGER PRIMARY KEY, username TEXT NOT NULL UNIQUE, display_name TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'director', password_hash TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, last_login_at TEXT
+);
+CREATE TABLE IF NOT EXISTS admin_audit_log (
+  id INTEGER PRIMARY KEY, admin_user_id INTEGER REFERENCES admin_users(id),
+  username TEXT NOT NULL, method TEXT NOT NULL, path TEXT NOT NULL,
+  status_code INTEGER NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 `);
 for (const [table, column, definition] of [
   ['events', 'description', 'TEXT'], ['events', 'venue', 'TEXT'], ['applicants', 'phone', 'TEXT'],
@@ -116,6 +126,7 @@ for (const [table, column, definition] of [
   ['applicants', 'was_school_student', 'INTEGER'],
   ['telegram_profiles', 'was_school_student', 'INTEGER'],
   ['profile_drafts', 'phone', 'TEXT'],
+  ['admin_sessions', 'user_id', 'INTEGER REFERENCES admin_users(id)'],
 ]) {
   try { db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`); } catch { /* already exists */ }
 }
@@ -171,6 +182,23 @@ function ensureConversationsForBotUsers() {
   })();
 }
 const sessionDurationMs = 30 * 24 * 60 * 60 * 1000;
+function passwordHash(password) {
+  const salt = crypto.randomBytes(16);
+  const hash = crypto.scryptSync(String(password), salt, 64);
+  return `scrypt$${salt.toString('base64url')}$${hash.toString('base64url')}`;
+}
+function passwordMatches(password, encoded) {
+  const [algorithm, salt, expected] = String(encoded || '').split('$');
+  if (algorithm !== 'scrypt' || !salt || !expected) return false;
+  const actual = crypto.scryptSync(String(password), Buffer.from(salt, 'base64url'), 64);
+  const target = Buffer.from(expected, 'base64url');
+  return actual.length === target.length && crypto.timingSafeEqual(actual, target);
+}
+if (!db.prepare('SELECT 1 FROM admin_users LIMIT 1').get()) {
+  db.prepare("INSERT INTO admin_users (username,display_name,role,password_hash) VALUES ('admin','Ева-София Мелихова','admin',?)")
+    .run(passwordHash(process.env.ADMIN_PASSWORD));
+}
+db.prepare("UPDATE admin_sessions SET user_id=(SELECT id FROM admin_users WHERE username='admin') WHERE user_id IS NULL").run();
 function sessionCookie(sessionId) {
   return `event_ops_session=${sessionId}; Max-Age=${sessionDurationMs / 1000}; Path=/; HttpOnly; SameSite=Lax${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`;
 }
@@ -178,31 +206,42 @@ function readCookie(req, name) {
   const pair = (req.headers.cookie || '').split(';').map(part => part.trim()).find(part => part.startsWith(`${name}=`));
   return pair ? decodeURIComponent(pair.slice(name.length + 1)) : null;
 }
-function sameSecret(value, secret) {
-  const left = Buffer.from(String(value || ''));
-  const right = Buffer.from(String(secret || ''));
-  return left.length === right.length && crypto.timingSafeEqual(left, right);
-}
-function isAdmin(req) {
+function currentAdmin(req) {
   const id = readCookie(req, 'event_ops_session');
-  if (!id) return false;
-  const session = db.prepare('SELECT expires_at FROM admin_sessions WHERE id=?').get(id);
+  if (!id) return null;
+  const session = db.prepare(`SELECT s.id AS session_id, s.expires_at, u.id, u.username, u.display_name, u.role
+    FROM admin_sessions s JOIN admin_users u ON u.id=s.user_id WHERE s.id=?`).get(id);
   if (!session || session.expires_at <= Date.now()) {
     db.prepare('DELETE FROM admin_sessions WHERE id=?').run(id);
-    return false;
+    return null;
   }
-  return true;
+  return session;
+}
+function isAdmin(req) {
+  return Boolean(currentAdmin(req));
 }
 const adminOnly = (req, res, next) => {
-  if (isAdmin(req)) {
+  const user = currentAdmin(req);
+  if (user) {
+    req.adminUser = user;
     const sessionId = readCookie(req, 'event_ops_session');
     db.prepare('UPDATE admin_sessions SET expires_at=? WHERE id=?').run(Date.now() + sessionDurationMs, sessionId);
     res.set('Set-Cookie', sessionCookie(sessionId));
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      res.once('finish', () => {
+        db.prepare('INSERT INTO admin_audit_log (admin_user_id,username,method,path,status_code) VALUES (?,?,?,?,?)')
+          .run(user.id, user.username, req.method, req.path, res.statusCode);
+      });
+    }
     return next();
   }
   if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'Сессия закончилась. Войдите снова.' });
   return res.redirect('/login/form');
 };
+const primaryAdminOnly = (req, res, next) => adminOnly(req, res, () => {
+  if (req.adminUser.role === 'admin') return next();
+  return res.status(403).json({ error: 'Только администратор может управлять учётными записями' });
+});
 
 const bot = new Bot(process.env.BOT_TOKEN || '');
 const botEnabled = Boolean(process.env.BOT_TOKEN) && process.env.BOT_ENABLED !== 'false';
@@ -545,10 +584,14 @@ app.get('/brand/logo.svg', (_, res) => res.sendFile(path.join(adminBuild, 'logo_
 app.get('/login', (req, res) => res.redirect(isAdmin(req) ? '/admin' : `/login/form${req.query.error ? '?error=1' : ''}`));
 app.get('/login/form', (req, res) => res.type('html').send(loginPage(req.query.error === '1')));
 app.post('/login', (req, res) => {
-  if (!sameSecret(req.body.password, process.env.ADMIN_PASSWORD)) return res.redirect('/login/form?error=1');
+  const username = String(req.body.username || 'admin').trim().toLowerCase();
+  const user = db.prepare('SELECT * FROM admin_users WHERE username=?').get(username);
+  if (!user || !passwordMatches(req.body.password, user.password_hash)) return res.redirect('/login/form?error=1');
   const sessionId = crypto.randomBytes(32).toString('base64url');
   db.prepare('DELETE FROM admin_sessions WHERE expires_at <= ?').run(Date.now());
-  db.prepare('INSERT INTO admin_sessions (id,expires_at) VALUES (?,?)').run(sessionId, Date.now() + sessionDurationMs);
+  db.prepare('INSERT INTO admin_sessions (id,user_id,expires_at) VALUES (?,?,?)').run(sessionId, user.id, Date.now() + sessionDurationMs);
+  db.prepare('UPDATE admin_users SET last_login_at=? WHERE id=?').run(nowIso(), user.id);
+  db.prepare('INSERT INTO admin_audit_log (admin_user_id,username,method,path,status_code) VALUES (?,?,?,?,?)').run(user.id, user.username, 'POST', '/login', 302);
   res.set('Set-Cookie', sessionCookie(sessionId));
   return res.redirect('/admin');
 });
@@ -581,7 +624,34 @@ app.get('/api/admin/state', adminOnly, (req, res) => {
   const postImages = db.prepare('SELECT id,post_id,original_name,position FROM post_images ORDER BY position').all();
   const postFiles = db.prepare('SELECT id,post_id,original_name FROM post_files ORDER BY created_at').all();
   const conversations = db.prepare('SELECT * FROM conversations ORDER BY last_message_at DESC').all();
-  res.json({ events, selected, people, assets, guests, messageImages, eventImages, posts, postImages, postFiles, conversations, botUsername: process.env.BOT_USERNAME });
+  const adminUsers = req.adminUser.role === 'admin' ? db.prepare('SELECT id,username,display_name,role,created_at,last_login_at FROM admin_users ORDER BY role, display_name').all() : [];
+  const auditLog = req.adminUser.role === 'admin' ? db.prepare('SELECT * FROM admin_audit_log ORDER BY id DESC LIMIT 60').all() : [];
+  res.json({ events, selected, people, assets, guests, messageImages, eventImages, posts, postImages, postFiles, conversations, adminUsers, auditLog, currentUser: req.adminUser, botUsername: process.env.BOT_USERNAME });
+});
+app.post('/api/admin/account/password', adminOnly, (req, res) => {
+  const currentPassword = String(req.body.current_password || '');
+  const newPassword = String(req.body.new_password || '');
+  const user = db.prepare('SELECT * FROM admin_users WHERE id=?').get(req.adminUser.id);
+  if (!passwordMatches(currentPassword, user.password_hash)) return res.status(400).json({ error: 'Текущий пароль введён неверно' });
+  if (newPassword.length < 10) return res.status(400).json({ error: 'Новый пароль должен содержать не меньше 10 символов' });
+  db.prepare('UPDATE admin_users SET password_hash=? WHERE id=?').run(passwordHash(newPassword), user.id);
+  res.json({ ok: true });
+});
+app.post('/api/admin/users', primaryAdminOnly, (req, res) => {
+  const username = String(req.body.username || '').trim().toLowerCase();
+  const displayName = String(req.body.display_name || '').trim();
+  const password = String(req.body.password || '');
+  const role = req.body.role === 'admin' ? 'admin' : 'director';
+  if (!/^[a-z0-9._-]{3,32}$/.test(username)) return res.status(400).json({ error: 'Логин: от 3 до 32 символов, латиница, цифры, точка, дефис или нижнее подчёркивание' });
+  if (!displayName) return res.status(400).json({ error: 'Укажите имя пользователя' });
+  if (password.length < 10) return res.status(400).json({ error: 'Временный пароль должен содержать не меньше 10 символов' });
+  try {
+    const result = db.prepare('INSERT INTO admin_users (username,display_name,role,password_hash) VALUES (?,?,?,?)').run(username, displayName, role, passwordHash(password));
+    res.json({ ok: true, id: Number(result.lastInsertRowid) });
+  } catch (error) {
+    if (String(error.message).includes('UNIQUE')) return res.status(400).json({ error: 'Этот логин уже занят' });
+    throw error;
+  }
 });
 app.get('/admin/legacy', adminOnly, (req, res) => {
   const events = db.prepare('SELECT * FROM events ORDER BY starts_at DESC').all();

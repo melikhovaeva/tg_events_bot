@@ -22,6 +22,7 @@ import {
   Replace,
   QrCode,
   Send,
+  Settings,
   Strikethrough,
   Trash2,
   Underline,
@@ -592,6 +593,27 @@ function Dialogs({ conversations, activeId, conversation, messages, onOpen, onSe
   </>;
 }
 
+function TeamSettings({ currentUser, users, auditLog, onChanged }) {
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [name, setName] = useState("");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [notice, setNotice] = useState("");
+  const [error, setError] = useState("");
+  const changePassword = async (event) => {
+    event.preventDefault(); setError(""); setNotice("");
+    try { await request("/api/admin/account/password", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }) }); setCurrentPassword(""); setNewPassword(""); setNotice("Пароль изменён."); }
+    catch (e) { setError(e.message); }
+  };
+  const createUser = async (event) => {
+    event.preventDefault(); setError(""); setNotice("");
+    try { await request("/api/admin/users", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ display_name: name, username, password, role: "director" }) }); setName(""); setUsername(""); setPassword(""); setNotice("Учётная запись создана. Передайте директору логин и временный пароль."); await onChanged(); }
+    catch (e) { setError(e.message); }
+  };
+  return <><h1 className="text-3xl font-semibold tracking-tight">Команда и доступ</h1><p className="mt-2 text-muted-foreground">У каждого сотрудника свой вход. Все изменения в системе фиксируются в журнале действий.</p>{notice && <p className="mt-5 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">{notice}</p>}{error && <p className="mt-5 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>}<div className="mt-7 grid max-w-5xl gap-5 lg:grid-cols-2"><Card><CardHeader><CardTitle>Мой пароль</CardTitle><CardDescription>{currentUser?.display_name} · {currentUser?.role === "admin" ? "администратор" : "директор"}</CardDescription></CardHeader><CardContent><form onSubmit={changePassword} className="grid gap-3"><Input type="password" autoComplete="current-password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} placeholder="Текущий пароль" required /><Input type="password" autoComplete="new-password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} placeholder="Новый пароль — не менее 10 символов" minLength={10} required /><Button className="w-fit">Сменить пароль</Button></form></CardContent></Card>{currentUser?.role === "admin" && <Card><CardHeader><CardTitle>Добавить директора</CardTitle><CardDescription>Создайте отдельный вход для Евгении или Александра.</CardDescription></CardHeader><CardContent><form onSubmit={createUser} className="grid gap-3"><Input value={name} onChange={(event) => setName(event.target.value)} placeholder="Имя, например Евгения" required /><Input value={username} onChange={(event) => setUsername(event.target.value.toLowerCase())} placeholder="Логин, например evgenia" pattern="[a-z0-9._-]{3,32}" required /><Input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Временный пароль — не менее 10 символов" minLength={10} required /><Button className="w-fit">Создать учётную запись</Button></form></CardContent></Card>}</div>{currentUser?.role === "admin" && <><Card className="mt-5 max-w-5xl"><CardHeader><CardTitle>Учётные записи</CardTitle></CardHeader><CardContent className="overflow-x-auto"><table className="w-full min-w-[480px] text-sm"><thead><tr className="border-b text-left text-muted-foreground"><th className="pb-3">Сотрудник</th><th className="pb-3">Логин</th><th className="pb-3">Роль</th><th className="pb-3">Последний вход</th></tr></thead><tbody>{users.map((user) => <tr key={user.id} className="border-b last:border-0"><td className="py-3 font-medium">{user.display_name}</td><td className="py-3">{user.username}</td><td className="py-3">{user.role === "admin" ? "Администратор" : "Директор"}</td><td className="py-3 text-muted-foreground">{user.last_login_at ? fmt(user.last_login_at) : "Ещё не входил"}</td></tr>)}</tbody></table></CardContent></Card><Card className="mt-5 max-w-5xl"><CardHeader><CardTitle>Журнал действий</CardTitle><CardDescription>Последние 60 действий в личном кабинете.</CardDescription></CardHeader><CardContent className="overflow-x-auto"><table className="w-full min-w-[560px] text-sm"><thead><tr className="border-b text-left text-muted-foreground"><th className="pb-3">Когда</th><th className="pb-3">Кто</th><th className="pb-3">Действие</th><th className="pb-3">Статус</th></tr></thead><tbody>{auditLog.map((entry) => <tr key={entry.id} className="border-b last:border-0"><td className="py-3 text-muted-foreground">{fmt(entry.created_at)}</td><td className="py-3">{entry.username}</td><td className="py-3 font-mono text-xs">{entry.method} {entry.path}</td><td className="py-3">{entry.status_code}</td></tr>)}</tbody></table></CardContent></Card></>}</>;
+}
+
 function App() {
   const initialRoute = new URLSearchParams(window.location.search);
   const initialPage = initialRoute.get("page") || "events";
@@ -606,6 +628,8 @@ function App() {
     assets: [],
     posts: [],
     conversations: [],
+    adminUsers: [],
+    auditLog: [],
   });
   const [page, setPage] = useState(initialPage);
   const [active, setActive] = useState(initialEvent);
@@ -774,6 +798,7 @@ function App() {
     { id: "guests", label: "Гости", icon: Users },
     { id: "posts", label: "Посты", icon: MessageSquare },
     { id: "dialogs", label: "Диалоги", icon: MessagesSquare },
+    { id: "team", label: "Команда", icon: Settings },
   ];
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -1033,6 +1058,7 @@ function App() {
             </>
           )}
           {page === "dialogs" && <Dialogs conversations={state.conversations || []} activeId={activeDialog} conversation={dialog} messages={dialogMessages} onOpen={loadDialog} onSend={async (text) => { await request(`/api/admin/dialogs/${encodeURIComponent(activeDialog)}/reply`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) }); await loadDialog(activeDialog); }} />}
+          {page === "team" && <TeamSettings currentUser={state.currentUser} users={state.adminUsers || []} auditLog={state.auditLog || []} onChanged={() => load(active)} />}
           {page === "postEditor" && <PostEditor post={activeBroadcast ? state.posts.find((post) => post.id === activeBroadcast) : null} events={state.events} postImages={state.postImages || []} postFiles={state.postFiles || []} onSaved={async (id) => { setActiveBroadcast(id); await load(active); }} onBack={() => setPage("posts")} />}
       </main>
       <CreateDialog open={open} setOpen={setOpen} create={create} />
