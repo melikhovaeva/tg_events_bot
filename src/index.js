@@ -198,7 +198,10 @@ if (!db.prepare('SELECT 1 FROM admin_users LIMIT 1').get()) {
   db.prepare("INSERT INTO admin_users (username,display_name,role,password_hash) VALUES ('admin','Ева-София Мелихова','admin',?)")
     .run(passwordHash(process.env.ADMIN_PASSWORD));
 }
-db.prepare("UPDATE admin_sessions SET user_id=(SELECT id FROM admin_users WHERE username='admin') WHERE user_id IS NULL").run();
+// Rename the initial bootstrap account to the administrator's chosen login.
+// Existing sessions remain valid because they are linked by user ID.
+db.prepare("UPDATE admin_users SET username='shultsee' WHERE username='admin' AND NOT EXISTS(SELECT 1 FROM admin_users WHERE username='shultsee')").run();
+db.prepare("UPDATE admin_sessions SET user_id=(SELECT id FROM admin_users WHERE username IN ('shultsee','admin') LIMIT 1) WHERE user_id IS NULL").run();
 function sessionCookie(sessionId) {
   return `event_ops_session=${sessionId}; Max-Age=${sessionDurationMs / 1000}; Path=/; HttpOnly; SameSite=Lax${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`;
 }
