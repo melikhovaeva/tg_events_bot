@@ -555,21 +555,21 @@ function Dialogs({ conversations, activeId, conversation, messages, onOpen, onSe
   };
   return <>
     <h1 className="text-3xl font-semibold tracking-tight">Диалоги</h1>
-    <p className="mt-2 text-muted-foreground">Сообщения, которые гости прислали этому боту. Здесь можно ответить от лица Perasperadastra.</p>
+    <p className="mt-2 text-muted-foreground">Все, кто запустил бота. Откройте карточку, чтобы увидеть историю и написать человеку первым.</p>
     <Card className="mt-7 overflow-hidden">
       <div className="grid min-h-[560px] md:grid-cols-[290px_minmax(0,1fr)]">
         <aside className="border-b md:border-b-0 md:border-r">
-          <div className="border-b px-4 py-3 text-sm font-medium">Все диалоги</div>
+          <div className="border-b px-4 py-3 text-sm font-medium">Все пользователи бота</div>
           <div className="max-h-[500px] overflow-y-auto p-2">
             {conversations.length ? conversations.map((item) => <button key={item.telegram_id} onClick={() => onOpen(item.telegram_id)} className={`w-full rounded-md px-3 py-3 text-left ${activeId === item.telegram_id ? "bg-accent" : "hover:bg-muted"}`}>
               <div className="flex items-center justify-between gap-2"><b className="truncate">{item.telegram_name ? `@${item.telegram_name}` : `Telegram ${item.telegram_id}`}</b>{count(item.unread_count) > 0 && <span className="rounded-full bg-foreground px-1.5 py-0.5 text-xs text-background">{item.unread_count}</span>}</div>
-              <p className="mt-1 truncate text-sm text-muted-foreground">{plainText(item.last_message)}</p>
-              <p className="mt-1 text-xs text-muted-foreground">{fmt(item.last_message_at)}</p>
-            </button>) : <p className="p-3 text-sm text-muted-foreground">Пока нет сообщений от гостей.</p>}
+              <p className="mt-1 truncate text-sm text-muted-foreground">{plainText(item.last_message) || "Диалог ещё не начат"}</p>
+              <p className="mt-1 text-xs text-muted-foreground">{plainText(item.last_message) ? fmt(item.last_message_at) : "Пока нет сообщений"}</p>
+            </button>) : <p className="p-3 text-sm text-muted-foreground">Пока никто не запустил бота.</p>}
           </div>
         </aside>
         <section className="flex min-w-0 flex-col">
-          {!conversation ? <div className="flex flex-1 items-center justify-center p-6 text-center text-sm text-muted-foreground">Выберите диалог слева, чтобы прочитать сообщения и ответить гостю.</div> : <>
+          {!conversation ? <div className="flex flex-1 items-center justify-center p-6 text-center text-sm text-muted-foreground">Выберите пользователя слева, чтобы прочитать сообщения или написать первым.</div> : <>
             <div className="border-b px-5 py-3"><b>{conversation.telegram_name ? `@${conversation.telegram_name}` : `Telegram ${conversation.telegram_id}`}</b><p className="mt-0.5 text-xs text-muted-foreground">Ответ будет отправлен в личный чат с ботом.</p></div>
             <div className="flex flex-1 flex-col gap-3 overflow-y-auto bg-muted/20 p-4 sm:p-5">
               {messages.map((message) => <div key={message.id} className={`max-w-[84%] rounded-lg px-3 py-2 text-sm leading-6 ${message.direction === "out" ? "self-end bg-foreground text-background" : "self-start border bg-background"}`}><p className="whitespace-pre-wrap">{plainText(message.text)}</p><p className={`mt-1 text-[11px] ${message.direction === "out" ? "text-background/60" : "text-muted-foreground"}`}>{fmt(message.created_at)}</p></div>)}
@@ -688,7 +688,7 @@ function App() {
       setInvitingIds((current) => current.filter((item) => item !== id));
     }
   };
-  const eligibleApplicants = state.people.filter((person) => person.telegram_id && !person.blocked && !["pending", "confirmed"].includes(person.invitation_status));
+  const eligibleApplicants = state.people.filter((person) => person.telegram_id && !person.blocked && person.invitation_status !== "confirmed");
   useEffect(() => {
     const eligibleIds = new Set(eligibleApplicants.map((person) => person.id));
     setSelectedApplicants((current) => current.filter((id) => eligibleIds.has(id)));
@@ -701,7 +701,7 @@ function App() {
   };
   const bulkInvite = () => setConfirm({
     title: `Отправить приглашение ${selectedApplicants.length} гостям?`,
-    description: 'Каждый получит текст приглашения этого мероприятия и 24 часа на ответ. Уже подтверждённые и ожидающие ответа гости будут пропущены.',
+    description: 'Каждый получит текст приглашения этого мероприятия и 24 часа на ответ. Для тех, кто уже ждёт ответа, приглашение будет отправлено повторно с новым сроком. Подтверждённые гости будут пропущены.',
     confirmLabel: 'Отправить приглашения',
     action: async () => {
       const response = await request(`/api/admin/events/${event.id}/invitations`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ applicantIds: selectedApplicants }) });
@@ -906,10 +906,7 @@ function App() {
                           </td>
                           <td className="py-3 text-right">
                             <div className="flex justify-end gap-1">
-                            {p.telegram_id && !p.blocked &&
-                              !["pending", "confirmed"].includes(
-                                p.invitation_status,
-                              ) && (
+                            {p.telegram_id && !p.blocked && p.invitation_status !== "confirmed" && (
                                 <Button size="sm" onClick={() => invite(p.id)} disabled={invitingIds.includes(p.id)}>
                                   <Send size={14} />
                                   {invitingIds.includes(p.id) ? "Отправляем…" : "Пригласить"}

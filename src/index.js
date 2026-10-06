@@ -147,6 +147,29 @@ function recordConversationMessage(telegramId, telegramName, direction, text) {
     ON CONFLICT(telegram_id) DO UPDATE SET telegram_name=excluded.telegram_name,last_message=excluded.last_message,last_message_at=excluded.last_message_at,unread_count=${direction === 'in' ? 'conversations.unread_count+1' : '0'}`)
     .run(telegramId, telegramName || null, text, createdAt, unreadCount);
 }
+function ensureConversationsForBotUsers() {
+  const users = db.prepare(`
+    SELECT telegram_id, telegram_name, accepted_at AS joined_at FROM telegram_consents
+    UNION ALL
+    SELECT telegram_id, telegram_name, updated_at AS joined_at FROM telegram_profiles
+    UNION ALL
+    SELECT telegram_id, telegram_name, created_at AS joined_at FROM applicants WHERE telegram_id IS NOT NULL
+  `).all();
+  const knownUsers = new Map();
+  for (const user of users) {
+    if (!user.telegram_id) continue;
+    const known = knownUsers.get(user.telegram_id);
+    if (!known || user.joined_at > known.joined_at || (!known.telegram_name && user.telegram_name)) knownUsers.set(user.telegram_id, user);
+  }
+  const add = db.prepare('INSERT OR IGNORE INTO conversations (telegram_id,telegram_name,last_message,last_message_at,unread_count) VALUES (?,?,?,?,0)');
+  const addName = db.prepare('UPDATE conversations SET telegram_name=COALESCE(telegram_name, ?) WHERE telegram_id=?');
+  db.transaction(() => {
+    knownUsers.forEach((user) => {
+      add.run(user.telegram_id, user.telegram_name || null, '', user.joined_at || nowIso());
+      if (user.telegram_name) addName.run(user.telegram_name, user.telegram_id);
+    });
+  })();
+}
 const sessionDurationMs = 30 * 24 * 60 * 60 * 1000;
 function sessionCookie(sessionId) {
   return `event_ops_session=${sessionId}; Max-Age=${sessionDurationMs / 1000}; Path=/; HttpOnly; SameSite=Lax${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`;
@@ -513,6 +536,7 @@ app.post('/logout', (req, res) => {
 });
 app.get('/', (_, res) => res.redirect('/admin'));
 app.get('/api/admin/state', adminOnly, (req, res) => {
+  ensureConversationsForBotUsers();
   const events = db.prepare(`SELECT e.*, COUNT(DISTINCT a.id) AS registered, COUNT(DISTINCT i.id) AS invited,
     SUM(CASE WHEN i.status='confirmed' THEN 1 ELSE 0 END) AS confirmed,
     SUM(CASE WHEN i.checked_in_at IS NOT NULL THEN 1 ELSE 0 END) AS checked_in
@@ -608,7 +632,7 @@ app.post('/api/admin/events/:id/invitations', adminOnly, async (req, res) => {
     if (!person) { skipped.push({ id, reason: 'заявка не найдена' }); continue; }
     if (!person.telegram_id) { skipped.push({ id, reason: 'гость не запустил бота' }); continue; }
     if (person.blocked) { skipped.push({ id, reason: 'доступ к боту ограничен' }); continue; }
-    if (['pending', 'confirmed'].includes(person.invitation_status)) { skipped.push({ id, reason: 'приглашение уже активно' }); continue; }
+    if (person.invitation_status === 'confirmed') { skipped.push({ id, reason: 'участие уже подтверждено' }); continue; }
     try {
       await sendInvite(id);
       sent.push(id);
