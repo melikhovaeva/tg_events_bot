@@ -42,8 +42,8 @@ export function createInvitationService({ db, bot }) {
     }
     const finalExpired = db.prepare("SELECT i.*, a.telegram_id, a.id applicant_id, e.id AS event_id, e.title, e.expired_text FROM invitations i JOIN applicants a ON a.id=i.applicant_id JOIN events e ON e.id=a.event_id WHERE i.status='confirmed' AND i.final_confirmed_at IS NULL AND i.final_expires_at <= ?").all(nowIso());
     for (const row of finalExpired) {
-      db.prepare("UPDATE invitations SET status='declined' WHERE id=?").run(row.id);
-      db.prepare("UPDATE applicants SET status='declined' WHERE id=?").run(row.applicant_id);
+      db.prepare("UPDATE invitations SET status='final_expired' WHERE id=?").run(row.id);
+      db.prepare("UPDATE applicants SET status='final_expired' WHERE id=?").run(row.applicant_id);
       if (row.telegram_id) await bot.api.sendMessage(row.telegram_id, eventText(row, 'expired'), messageOptions()).catch(console.error);
     }
     const upcoming = db.prepare(`SELECT i.*, a.telegram_id, e.id AS event_id, e.title, e.starts_at, e.reminder_text FROM invitations i JOIN applicants a ON a.id=i.applicant_id JOIN events e ON e.id=a.event_id WHERE i.status='confirmed' AND i.final_confirmed_at IS NULL AND i.reminder_sent_at IS NULL AND e.starts_at BETWEEN ? AND ?`).all(nowIso(), new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString());

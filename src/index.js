@@ -120,13 +120,24 @@ for (const [table, column, definition] of [
   try { db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`); } catch { /* already exists */ }
 }
 
+// Before this status existed, an unanswered final confirmation was saved as a
+// regular decline. A real decline always has responded_at, so this restores
+// the distinction for existing guests as well.
+db.transaction(() => {
+  const missedFinals = db.prepare("SELECT applicant_id FROM invitations WHERE status='declined' AND final_expires_at IS NOT NULL AND final_confirmed_at IS NULL AND responded_at IS NULL").all();
+  db.prepare("UPDATE invitations SET status='final_expired' WHERE status='declined' AND final_expires_at IS NOT NULL AND final_confirmed_at IS NULL AND responded_at IS NULL").run();
+  const updateApplicant = db.prepare("UPDATE applicants SET status='final_expired' WHERE id=? AND status='declined'");
+  missedFinals.forEach(({ applicant_id }) => updateApplicant.run(applicant_id));
+})();
+
 const mainKeyboard = () => new Keyboard()
   .text('Мероприятия').text('Мои регистрации').row()
   .text('Написать организатору').resized().persistent();
 const userStatus = {
   awaiting_review: 'заявка рассматривается', pending: 'ждём ответа на приглашение',
   invited: 'ждём ответа на приглашение', confirmed: 'участие подтверждено',
-  declined: 'участие отменено', expired: 'ответ не получен', cancelled: 'регистрация отменена',
+  declined: 'участие отменено', expired: 'ответ не получен',
+  final_expired: 'финальное подтверждение не получено', cancelled: 'регистрация отменена',
 };
 function recordConversationMessage(telegramId, telegramName, direction, text) {
   const createdAt = nowIso();

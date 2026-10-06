@@ -67,6 +67,7 @@ const statusNames = {
   confirmed: "Подтвердил",
   declined: "Отказался",
   expired: "Не ответил за 24 часа",
+  final_expired: "Не подтвердил за 6 часов",
   cancelled: "Отменил регистрацию",
 };
 const fmt = (value) =>
