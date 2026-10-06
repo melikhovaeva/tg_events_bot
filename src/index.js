@@ -448,7 +448,10 @@ async function showMyApplications(ctx) {
   for (const application of applications) {
     const status = application.invitation_status || application.status;
     const date = new Date(application.starts_at).toLocaleString('ru-RU', { dateStyle: 'medium', timeStyle: 'short' });
-    const keyboard = application.status === 'cancelled' ? undefined : new InlineKeyboard().text('Отменить регистрацию', `withdraw:${application.id}`);
+    const completedStatuses = new Set(['cancelled', 'declined', 'expired', 'final_expired']);
+    const keyboard = completedStatuses.has(status) || completedStatuses.has(application.status)
+      ? undefined
+      : new InlineKeyboard().text('Отменить регистрацию', `withdraw:${application.id}`);
     await ctx.reply(`«${application.title}»\n${date}\nСтатус: ${userStatus[status] || status}`, { reply_markup: keyboard });
   }
 }
