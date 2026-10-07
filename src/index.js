@@ -98,6 +98,15 @@ CREATE TABLE IF NOT EXISTS post_recipients (
   post_id INTEGER NOT NULL REFERENCES posts(id), telegram_id TEXT NOT NULL,
   PRIMARY KEY (post_id, telegram_id)
 );
+CREATE TABLE IF NOT EXISTS post_sends (
+  id INTEGER PRIMARY KEY, post_id INTEGER NOT NULL REFERENCES posts(id), sender_id INTEGER REFERENCES admin_users(id),
+  recipients_count INTEGER NOT NULL, sent_count INTEGER NOT NULL, failed_count INTEGER NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS post_delivery_results (
+  id INTEGER PRIMARY KEY, send_id INTEGER NOT NULL REFERENCES post_sends(id), telegram_id TEXT NOT NULL,
+  status TEXT NOT NULL, reason TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 CREATE TABLE IF NOT EXISTS post_images (
   id INTEGER PRIMARY KEY, post_id INTEGER NOT NULL REFERENCES posts(id), original_name TEXT NOT NULL,
   stored_name TEXT NOT NULL UNIQUE, position INTEGER NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -637,9 +646,11 @@ app.get('/api/admin/state', adminOnly, (req, res) => {
     LEFT JOIN (SELECT telegram_id, MAX(name) AS name FROM applicants WHERE telegram_id IS NOT NULL GROUP BY telegram_id) a ON a.telegram_id=c.telegram_id
     ORDER BY c.last_message_at DESC`).all();
   const postRecipients = db.prepare('SELECT post_id,telegram_id FROM post_recipients').all();
+  const postSendSummaries = db.prepare(`SELECT s.* FROM post_sends s
+    JOIN (SELECT post_id, MAX(id) AS id FROM post_sends GROUP BY post_id) latest ON latest.id=s.id`).all();
   const adminUsers = req.adminUser.role === 'admin' ? db.prepare('SELECT id,username,display_name,role,created_at,last_login_at FROM admin_users ORDER BY role, display_name').all() : [];
   const auditLog = req.adminUser.role === 'admin' ? db.prepare('SELECT * FROM admin_audit_log ORDER BY id DESC LIMIT 60').all() : [];
-  res.json({ events, selected, people, assets, guests, messageImages, eventImages, posts, postImages, postFiles, postRecipients, conversations, adminUsers, auditLog, currentUser: req.adminUser, botUsername: process.env.BOT_USERNAME });
+  res.json({ events, selected, people, assets, guests, messageImages, eventImages, posts, postImages, postFiles, postRecipients, postSendSummaries, conversations, adminUsers, auditLog, currentUser: req.adminUser, botUsername: process.env.BOT_USERNAME });
 });
 app.post('/api/admin/account/password', adminOnly, (req, res) => {
   const currentPassword = String(req.body.current_password || '');
@@ -835,6 +846,19 @@ function savePostRecipients(postId, recipientIds) {
     });
   })();
 }
+function postRecipientsFor(post) {
+  if (post.audience === 'event' && post.event_id) {
+    return db.prepare(`SELECT DISTINCT a.telegram_id FROM applicants a
+      WHERE a.event_id=? AND a.telegram_id IS NOT NULL
+      AND NOT EXISTS(SELECT 1 FROM blocked_users b WHERE b.telegram_id=a.telegram_id)`).all(post.event_id);
+  }
+  if (post.audience === 'all') {
+    return db.prepare(`SELECT c.telegram_id FROM conversations c
+      WHERE NOT EXISTS(SELECT 1 FROM blocked_users b WHERE b.telegram_id=c.telegram_id)`).all();
+  }
+  return db.prepare(`SELECT r.telegram_id FROM post_recipients r
+    WHERE r.post_id=? AND NOT EXISTS(SELECT 1 FROM blocked_users b WHERE b.telegram_id=r.telegram_id)`).all(post.id);
+}
 app.post('/api/admin/posts', adminOnly, (req, res) => {
   const title = String(req.body.title || '').trim();
   if (!title) return res.status(400).json({ error: 'Добавьте название поста' });
@@ -896,22 +920,18 @@ app.delete('/api/admin/post-files/:id', adminOnly, (req, res) => {
   if (!file) return res.sendStatus(404);
   db.prepare('DELETE FROM post_files WHERE id=?').run(file.id); fs.unlink(path.join(uploadsDir, file.stored_name), () => {}); res.json({ ok: true });
 });
+app.get('/api/admin/posts/:id/recipients', adminOnly, (req, res) => {
+  const post = db.prepare('SELECT * FROM posts WHERE id=?').get(req.params.id);
+  if (!post) return res.sendStatus(404);
+  ensureConversationsForBotUsers();
+  const recipients = postRecipientsFor(post);
+  res.json({ count: recipients.length });
+});
 app.post('/api/admin/posts/:id/send', adminOnly, async (req, res) => {
   const post = db.prepare('SELECT * FROM posts WHERE id=?').get(req.params.id);
   if (!post) return res.sendStatus(404);
   ensureConversationsForBotUsers();
-  let recipients = [];
-  if (post.audience === 'event' && post.event_id) {
-    recipients = db.prepare(`SELECT DISTINCT a.telegram_id FROM applicants a
-      WHERE a.event_id=? AND a.telegram_id IS NOT NULL
-      AND NOT EXISTS(SELECT 1 FROM blocked_users b WHERE b.telegram_id=a.telegram_id)`).all(post.event_id);
-  } else if (post.audience === 'all') {
-    recipients = db.prepare(`SELECT c.telegram_id FROM conversations c
-      WHERE NOT EXISTS(SELECT 1 FROM blocked_users b WHERE b.telegram_id=c.telegram_id)`).all();
-  } else {
-    recipients = db.prepare(`SELECT r.telegram_id FROM post_recipients r
-      WHERE r.post_id=? AND NOT EXISTS(SELECT 1 FROM blocked_users b WHERE b.telegram_id=r.telegram_id)`).all(post.id);
-  }
+  const recipients = postRecipientsFor(post);
   if (!recipients.length) return res.status(400).json({ error: 'В выбранной аудитории пока нет доступных пользователей' });
   const images = db.prepare('SELECT * FROM post_images WHERE post_id=? ORDER BY position').all(post.id);
   const files = db.prepare('SELECT * FROM post_files WHERE post_id=? ORDER BY created_at').all(post.id);
@@ -930,7 +950,14 @@ app.post('/api/admin/posts/:id/send', adminOnly, async (req, res) => {
       skipped.push({ telegramId, reason: error.description || error.message || 'не удалось отправить' });
     }
   }
-  res.json({ ok: true, sent: sent.length, skipped });
+  const send = db.prepare('INSERT INTO post_sends (post_id,sender_id,recipients_count,sent_count,failed_count,created_at) VALUES (?,?,?,?,?,?)')
+    .run(post.id, req.adminUser.id, recipients.length, sent.length, skipped.length, nowIso());
+  const recordResult = db.prepare('INSERT INTO post_delivery_results (send_id,telegram_id,status,reason,created_at) VALUES (?,?,?,?,?)');
+  db.transaction(() => {
+    sent.forEach((telegramId) => recordResult.run(send.lastInsertRowid, telegramId, 'sent', null, nowIso()));
+    skipped.forEach(({ telegramId, reason }) => recordResult.run(send.lastInsertRowid, telegramId, 'failed', reason, nowIso()));
+  })();
+  res.json({ ok: true, sent: sent.length, skipped, sendId: Number(send.lastInsertRowid) });
 });
 app.post('/api/admin/events/:id/message-images/:key', adminOnly, upload.array('images', 9), (req, res) => {
   const messageKeys = new Set(['registration', 'invite', 'expired', 'confirmed', 'declined', 'reminder']);
