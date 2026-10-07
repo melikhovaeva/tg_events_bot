@@ -544,7 +544,7 @@ async function showEvents(ctx) {
   return ctx.reply('Выберите мероприятие, чтобы посмотреть детали.', { reply_markup: keyboard });
 }
 async function showMyApplications(ctx) {
-  const applications = db.prepare(`SELECT a.*, e.title, e.starts_at, i.status AS invitation_status
+  const applications = db.prepare(`SELECT a.*, e.title, e.starts_at, e.description, e.registration_text, e.venue, i.status AS invitation_status
     FROM applicants a JOIN events e ON e.id=a.event_id LEFT JOIN invitations i ON i.applicant_id=a.id
     WHERE a.telegram_id=? ORDER BY e.starts_at DESC`).all(String(ctx.from.id));
   if (!applications.length) return ctx.reply('У вас пока нет регистраций. Откройте «Мероприятия», чтобы выбрать событие.', { reply_markup: mainKeyboard() });
@@ -555,7 +555,14 @@ async function showMyApplications(ctx) {
     const keyboard = completedStatuses.has(status) || completedStatuses.has(application.status)
       ? undefined
       : new InlineKeyboard().text('Отменить регистрацию', `withdraw:${application.id}`);
-    await ctx.reply(`«${application.title}»\n${date}\nСтатус: ${userStatus[status] || status}`, { reply_markup: keyboard });
+    const announcement = application.registration_text || application.description;
+    const text = [
+      `<b>«${esc(application.title)}»</b>`,
+      announcement && telegramHtml(announcement),
+      `🗓 ${esc(date)}${application.venue ? `\n📍 ${esc(application.venue)}` : ''}`,
+      `Статус: ${esc(userStatus[status] || status)}`,
+    ].filter(Boolean).join('\n\n');
+    await ctx.reply(text, messageOptions({ reply_markup: keyboard }));
   }
 }
 bot.callbackQuery(/^event:(\d+)$/, async ctx => {
