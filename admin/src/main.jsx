@@ -1757,6 +1757,18 @@ function Dialogs({
   );
 }
 
+function auditLabel(entry) {
+  if (entry.action) return entry.action;
+  if (entry.method === "POST" && entry.path === "/login") return "Вошёл в систему";
+  if (entry.method === "POST" && entry.path === "/admin/events") return "Создал мероприятие";
+  if (entry.method === "POST" && /\/events\/\d+\/invitations$/.test(entry.path)) return "Отправил приглашения";
+  if (entry.method === "POST" && /\/posts\/\d+\/send$/.test(entry.path)) return "Отправил пост";
+  if (entry.method === "POST" && entry.path === "/api/admin/checkin") return "Отметил гостя на чек-ине";
+  if (entry.method === "DELETE" && /\/applicants\/\d+$/.test(entry.path)) return "Удалил регистрацию гостя";
+  if (entry.method === "POST" && /\/registration$/.test(entry.path)) return "Изменил регистрацию мероприятия";
+  return "Изменил данные в системе";
+}
+
 function TeamSettings({ currentUser, users, events, auditLog, onChanged }) {
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -1996,7 +2008,7 @@ function TeamSettings({ currentUser, users, events, auditLog, onChanged }) {
                   <tr className="border-b text-left text-muted-foreground">
                     <th className="pb-3">Когда</th>
                     <th className="pb-3">Кто</th>
-                    <th className="pb-3">Действие</th>
+                    <th className="pb-3">Что сделал</th>
                     <th className="pb-3">Статус</th>
                   </tr>
                 </thead>
@@ -2007,8 +2019,9 @@ function TeamSettings({ currentUser, users, events, auditLog, onChanged }) {
                         {fmt(entry.created_at)}
                       </td>
                       <td className="py-3">{entry.username}</td>
-                      <td className="py-3 font-mono text-xs">
-                        {entry.method} {entry.path}
+                      <td className="py-3">
+                        <p className="font-medium">{auditLabel(entry)}</p>
+                        {entry.details && <p className="mt-0.5 text-xs text-muted-foreground">{entry.details}</p>}
                       </td>
                       <td className="py-3">{entry.status_code}</td>
                     </tr>

@@ -142,6 +142,8 @@ for (const [table, column, definition] of [
   ['admin_sessions', 'user_id', 'INTEGER REFERENCES admin_users(id)'],
   ['admin_users', 'is_active', 'INTEGER NOT NULL DEFAULT 1'],
   ['admin_users', 'event_id', 'INTEGER REFERENCES events(id)'],
+  ['admin_audit_log', 'action', 'TEXT'],
+  ['admin_audit_log', 'details', 'TEXT'],
 ]) {
   try { db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`); } catch { /* already exists */ }
 }
@@ -239,6 +241,22 @@ function currentAdmin(req) {
 function isAdmin(req) {
   return Boolean(currentAdmin(req));
 }
+function auditFallback(method, path) {
+  if (method === 'POST' && path === '/login') return 'Вошёл в систему';
+  if (method === 'POST' && path === '/admin/events') return 'Создал мероприятие';
+  if (method === 'POST' && /\/api\/admin\/events\/\d+$/.test(path)) return 'Изменил мероприятие';
+  if (method === 'DELETE' && /\/api\/admin\/events\/\d+$/.test(path)) return 'Удалил мероприятие';
+  if (method === 'POST' && /\/api\/admin\/events\/\d+\/texts$/.test(path)) return 'Изменил тексты мероприятия';
+  if (method === 'POST' && /\/api\/admin\/posts$/.test(path)) return 'Создал пост';
+  if (method === 'POST' && /\/api\/admin\/posts\/\d+$/.test(path)) return 'Изменил пост';
+  if (method === 'DELETE' && /\/api\/admin\/applicants\/\d+$/.test(path)) return 'Удалил регистрацию гостя';
+  if (method === 'POST' && /\/api\/admin\/applicants\/\d+\/block$/.test(path)) return 'Изменил доступ гостя к боту';
+  return 'Изменил данные в системе';
+}
+function setAudit(req, action, details = null) {
+  req.auditAction = action;
+  req.auditDetails = details;
+}
 const adminOnly = (req, res, next) => {
   const user = currentAdmin(req);
   if (user) {
@@ -251,8 +269,8 @@ const adminOnly = (req, res, next) => {
     res.set('Set-Cookie', sessionCookie(sessionId));
     if (req.method !== 'GET' && req.method !== 'HEAD') {
       res.once('finish', () => {
-        db.prepare('INSERT INTO admin_audit_log (admin_user_id,username,method,path,status_code) VALUES (?,?,?,?,?)')
-          .run(user.id, user.username, req.method, req.path, res.statusCode);
+        db.prepare('INSERT INTO admin_audit_log (admin_user_id,username,method,path,status_code,action,details) VALUES (?,?,?,?,?,?,?)')
+          .run(user.id, user.username, req.method, req.path, res.statusCode, req.auditAction || auditFallback(req.method, req.path), req.auditDetails || null);
       });
     }
     return next();
@@ -668,6 +686,7 @@ app.post('/api/admin/account/password', adminOnly, (req, res) => {
     db.prepare('UPDATE admin_users SET password_hash=? WHERE id=?').run(passwordHash(newPassword), user.id);
     db.prepare('DELETE FROM admin_sessions WHERE user_id=? AND id!=?').run(user.id, readCookie(req, 'event_ops_session'));
   })();
+  setAudit(req, 'Изменил пароль');
   res.json({ ok: true });
 });
 app.post('/api/admin/users', primaryAdminOnly, (req, res) => {
@@ -682,6 +701,7 @@ app.post('/api/admin/users', primaryAdminOnly, (req, res) => {
   if (role === 'assistant' && !db.prepare('SELECT 1 FROM events WHERE id=?').get(eventId)) return res.status(400).json({ error: 'Выберите мероприятие для помощника' });
   try {
     const result = db.prepare('INSERT INTO admin_users (username,display_name,role,password_hash,event_id) VALUES (?,?,?,?,?)').run(username, displayName, role, passwordHash(password), eventId);
+    setAudit(req, 'Создал учётную запись', `${displayName} · ${role === 'assistant' ? 'помощник мероприятия' : role === 'admin' ? 'администратор' : 'директор'}`);
     res.json({ ok: true, id: Number(result.lastInsertRowid) });
   } catch (error) {
     if (String(error.message).includes('UNIQUE')) return res.status(400).json({ error: 'Этот логин уже занят' });
@@ -698,6 +718,7 @@ app.post('/api/admin/users/:id/status', primaryAdminOnly, (req, res) => {
     db.prepare('UPDATE admin_users SET is_active=? WHERE id=?').run(active ? 1 : 0, user.id);
     if (!active) db.prepare('DELETE FROM admin_sessions WHERE user_id=?').run(user.id);
   })();
+  setAudit(req, active ? 'Восстановил доступ сотрудника' : 'Отключил доступ сотрудника', user.display_name);
   res.json({ ok: true });
 });
 app.get('/admin/legacy', adminOnly, (req, res) => {
@@ -742,6 +763,7 @@ app.post('/api/admin/events/:id/registration', adminOnly, (req, res) => {
   const open = Boolean(req.body.open);
   const notify = open && !event.registration_open;
   db.prepare('UPDATE events SET registration_open=? WHERE id=?').run(open ? 1 : 0, event.id);
+  setAudit(req, open ? 'Открыл регистрацию' : 'Закрыл регистрацию', event.title);
   ensureConversationsForBotUsers();
   const recipients = notify ? db.prepare(`SELECT telegram_id FROM conversations
     WHERE NOT EXISTS(SELECT 1 FROM blocked_users b WHERE b.telegram_id=conversations.telegram_id)`).all() : [];
@@ -801,6 +823,7 @@ app.post('/api/admin/events/:id/invitations', adminOnly, async (req, res) => {
       if (sent.length < ids.length) await new Promise(resolve => setTimeout(resolve, 60));
     } catch (error) { skipped.push({ id, reason: error.message }); }
   }
+  setAudit(req, 'Отправил приглашения', `Мероприятие #${event.id} · доставлено: ${sent.length}, не доставлено: ${skipped.length}`);
   res.json({ ok: true, sent, skipped });
 });
 app.delete('/api/admin/events/:id', adminOnly, (req, res) => {
@@ -1001,6 +1024,7 @@ app.post('/api/admin/posts/:id/send', adminOnly, async (req, res) => {
     sent.forEach((telegramId) => recordResult.run(send.lastInsertRowid, telegramId, 'sent', null, nowIso()));
     skipped.forEach(({ telegramId, reason }) => recordResult.run(send.lastInsertRowid, telegramId, 'failed', reason, nowIso()));
   })();
+  setAudit(req, 'Отправил пост', `«${post.title}» · доставлено: ${sent.length} из ${recipients.length}${skipped.length ? `, ошибок: ${skipped.length}` : ''}`);
   res.json({ ok: true, sent: sent.length, skipped, sendId: Number(send.lastInsertRowid) });
 });
 app.post('/api/admin/events/:id/message-images/:key', adminOnly, upload.array('images', 9), (req, res) => {
@@ -1047,6 +1071,7 @@ app.post('/api/admin/checkin', adminOnly, (req, res) => {
   if (row.status !== 'confirmed') return res.status(409).json({ error: 'Участие этого гостя не подтверждено' });
   if (row.checked_in_at) return res.status(409).json({ error: 'Гость уже отмечен', guest: row.name, already: true });
   db.prepare('UPDATE invitations SET checked_in_at=? WHERE id=?').run(nowIso(), row.id);
+  setAudit(req, 'Отметил гостя на чек-ине', `${row.name} · ${row.title}`);
   res.json({ ok: true, guest: row.name, event: row.title });
 });
 app.post('/admin/events/:id/assets', adminOnly, upload.single('material'), (req, res) => {
