@@ -83,4 +83,4 @@ export const telegramHtml = (value = '') => {
 };
 
 export const eventText = (event, key) => telegramHtml((event[`${key}_text`] || defaultText[key]).replaceAll('{event}', event.title));
-export const messageOptions = (options) => ({ parse_mode: 'HTML', ...options });
+export const messageOptions = (options) => ({ parse_mode: 'HTML', link_preview_options: { is_disabled: true }, ...options });
