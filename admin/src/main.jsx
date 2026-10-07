@@ -1028,6 +1028,9 @@ function Checkin({ event, onBack, onCheckedIn }) {
   const stream = useRef(null);
   const frame = useRef(null);
   const processing = useRef(false);
+  const detecting = useRef(false);
+  const nativeDetector = useRef(null);
+  const qrFile = useRef(null);
   const [code, setCode] = useState("");
   const [result, setResult] = useState(null);
   const [error, setError] = useState("");
@@ -1037,6 +1040,7 @@ function Checkin({ event, onBack, onCheckedIn }) {
     frame.current = null;
     stream.current?.getTracks().forEach((track) => track.stop());
     stream.current = null;
+    detecting.current = false;
     setScanning(false);
   };
   const submitCode = async (value) => {
@@ -1084,40 +1088,49 @@ function Checkin({ event, onBack, onCheckedIn }) {
       video.current.srcObject = stream.current;
       await video.current.play();
       setScanning(true);
+      const BarcodeDetector = window.BarcodeDetector;
+      nativeDetector.current = BarcodeDetector
+        ? new BarcodeDetector({ formats: ["qr_code"] })
+        : null;
       const scan = () => {
+        if (detecting.current) return;
+        detecting.current = true;
         const player = video.current;
         const surface = canvas.current;
-        if (!player || !surface || !stream.current) return;
-        if (player.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
-          const scale = Math.min(
-            1,
-            1280 / Math.max(player.videoWidth, player.videoHeight),
-          );
-          surface.width = Math.max(1, Math.floor(player.videoWidth * scale));
-          surface.height = Math.max(1, Math.floor(player.videoHeight * scale));
-          const context = surface.getContext("2d", {
-            willReadFrequently: true,
-          });
-          context?.drawImage(player, 0, 0, surface.width, surface.height);
-          const found =
-            context &&
-            jsQR(
-              context.getImageData(0, 0, surface.width, surface.height).data,
-              surface.width,
-              surface.height,
-              { inversionAttempts: "attemptBoth" },
-            );
-          if (found && !processing.current) {
-            processing.current = true;
-            stopCamera();
-            setCode(found.data);
-            void submitCode(found.data).finally(() => {
+        void (async () => {
+          try {
+            if (!player || !surface || !stream.current || player.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return;
+            const scale = Math.min(1, 1280 / Math.max(player.videoWidth, player.videoHeight));
+            surface.width = Math.max(1, Math.floor(player.videoWidth * scale));
+            surface.height = Math.max(1, Math.floor(player.videoHeight * scale));
+            const context = surface.getContext("2d", { willReadFrequently: true });
+            context?.drawImage(player, 0, 0, surface.width, surface.height);
+            let value = null;
+            if (nativeDetector.current) {
+              try {
+                const matches = await nativeDetector.current.detect(player);
+                value = matches[0]?.rawValue || null;
+              } catch (nativeError) {
+                console.warn("Native QR scan failed; falling back to jsQR", nativeError);
+              }
+            }
+            if (!value && context) {
+              value = jsQR(context.getImageData(0, 0, surface.width, surface.height).data, surface.width, surface.height, { inversionAttempts: "attemptBoth" })?.data || null;
+            }
+            if (value && !processing.current) {
+              processing.current = true;
+              stopCamera();
+              setCode(value);
+              await submitCode(value);
               processing.current = false;
-            });
-            return;
+            }
+          } catch (cameraError) {
+            console.warn("QR scan frame failed", cameraError);
+          } finally {
+            detecting.current = false;
+            if (stream.current && !processing.current) frame.current = requestAnimationFrame(scan);
           }
-        }
-        frame.current = requestAnimationFrame(scan);
+        })();
       };
       frame.current = requestAnimationFrame(scan);
     } catch (e) {
@@ -1126,6 +1139,28 @@ function Checkin({ event, onBack, onCheckedIn }) {
         "Не удалось открыть камеру. Разрешите доступ к камере или введите код вручную.",
       );
     }
+  };
+  const scanImageFile = (file) => {
+    if (!file) return;
+    setError("");
+    const image = new Image();
+    const url = URL.createObjectURL(file);
+    image.onload = () => {
+      const surface = canvas.current;
+      const context = surface?.getContext("2d", { willReadFrequently: true });
+      if (!surface || !context) return;
+      const scale = Math.min(1, 1600 / Math.max(image.naturalWidth, image.naturalHeight));
+      surface.width = Math.max(1, Math.floor(image.naturalWidth * scale));
+      surface.height = Math.max(1, Math.floor(image.naturalHeight * scale));
+      context.drawImage(image, 0, 0, surface.width, surface.height);
+      const value = jsQR(context.getImageData(0, 0, surface.width, surface.height).data, surface.width, surface.height, { inversionAttempts: "attemptBoth" })?.data;
+      URL.revokeObjectURL(url);
+      if (!value) return setError("Не нашли QR на этом изображении. Попробуйте выбрать более чёткое фото.");
+      setCode(value);
+      void submitCode(value);
+    };
+    image.onerror = () => { URL.revokeObjectURL(url); setError("Не удалось открыть изображение."); };
+    image.src = url;
   };
   useEffect(() => {
     input.current?.focus();
@@ -1163,6 +1198,10 @@ function Checkin({ event, onBack, onCheckedIn }) {
                 </>
               )}
             </Button>
+            <input ref={qrFile} type="file" accept="image/*" capture="environment" className="hidden" onChange={(event) => { scanImageFile(event.target.files?.[0]); event.target.value = ""; }} />
+            {!scanning && <Button type="button" variant="outline" onClick={() => qrFile.current?.click()}>
+              <ImagePlus size={16} /> Выбрать QR из фото
+            </Button>}
             <div className={scanning ? "overflow-hidden rounded-md bg-black" : "hidden"}>
               <video
                 ref={video}
