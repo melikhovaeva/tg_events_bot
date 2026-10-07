@@ -94,6 +94,10 @@ CREATE TABLE IF NOT EXISTS posts (
   audience TEXT NOT NULL DEFAULT 'all', event_id INTEGER REFERENCES events(id),
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS post_recipients (
+  post_id INTEGER NOT NULL REFERENCES posts(id), telegram_id TEXT NOT NULL,
+  PRIMARY KEY (post_id, telegram_id)
+);
 CREATE TABLE IF NOT EXISTS post_images (
   id INTEGER PRIMARY KEY, post_id INTEGER NOT NULL REFERENCES posts(id), original_name TEXT NOT NULL,
   stored_name TEXT NOT NULL UNIQUE, position INTEGER NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -626,10 +630,15 @@ app.get('/api/admin/state', adminOnly, (req, res) => {
   const posts = db.prepare(`SELECT p.*, e.title AS event_title FROM posts p LEFT JOIN events e ON e.id=p.event_id ORDER BY p.updated_at DESC`).all();
   const postImages = db.prepare('SELECT id,post_id,original_name,position FROM post_images ORDER BY position').all();
   const postFiles = db.prepare('SELECT id,post_id,original_name FROM post_files ORDER BY created_at').all();
-  const conversations = db.prepare('SELECT * FROM conversations ORDER BY last_message_at DESC').all();
+  const conversations = db.prepare(`SELECT c.*, COALESCE(p.name, a.name) AS person_name
+    FROM conversations c
+    LEFT JOIN telegram_profiles p ON p.telegram_id=c.telegram_id
+    LEFT JOIN (SELECT telegram_id, MAX(name) AS name FROM applicants WHERE telegram_id IS NOT NULL GROUP BY telegram_id) a ON a.telegram_id=c.telegram_id
+    ORDER BY c.last_message_at DESC`).all();
+  const postRecipients = db.prepare('SELECT post_id,telegram_id FROM post_recipients').all();
   const adminUsers = req.adminUser.role === 'admin' ? db.prepare('SELECT id,username,display_name,role,created_at,last_login_at FROM admin_users ORDER BY role, display_name').all() : [];
   const auditLog = req.adminUser.role === 'admin' ? db.prepare('SELECT * FROM admin_audit_log ORDER BY id DESC LIMIT 60').all() : [];
-  res.json({ events, selected, people, assets, guests, messageImages, eventImages, posts, postImages, postFiles, conversations, adminUsers, auditLog, currentUser: req.adminUser, botUsername: process.env.BOT_USERNAME });
+  res.json({ events, selected, people, assets, guests, messageImages, eventImages, posts, postImages, postFiles, postRecipients, conversations, adminUsers, auditLog, currentUser: req.adminUser, botUsername: process.env.BOT_USERNAME });
 });
 app.post('/api/admin/account/password', adminOnly, (req, res) => {
   const currentPassword = String(req.body.current_password || '');
@@ -812,6 +821,19 @@ app.post('/api/admin/events/:id/images/order', adminOnly, (req, res) => {
   if (ids.length !== found.length || ids.some(id => !found.includes(id)) || new Set(ids).size !== ids.length) return res.status(400).json({ error: 'Не удалось изменить порядок изображений' });
   const update = db.prepare('UPDATE event_images SET position=? WHERE id=?'); db.transaction(() => ids.forEach((id, position) => update.run(position, id)))(); res.json({ ok: true });
 });
+function manualRecipients(value) {
+  return [...new Set((Array.isArray(value) ? value : []).map(String).filter(Boolean))].slice(0, 500);
+}
+function savePostRecipients(postId, recipientIds) {
+  const remove = db.prepare('DELETE FROM post_recipients WHERE post_id=?');
+  const add = db.prepare('INSERT OR IGNORE INTO post_recipients (post_id,telegram_id) VALUES (?,?)');
+  db.transaction(() => {
+    remove.run(postId);
+    recipientIds.forEach((telegramId) => {
+      if (db.prepare('SELECT 1 FROM conversations WHERE telegram_id=?').get(telegramId)) add.run(postId, telegramId);
+    });
+  })();
+}
 app.post('/api/admin/posts', adminOnly, (req, res) => {
   const title = String(req.body.title || '').trim();
   if (!title) return res.status(400).json({ error: 'Добавьте название поста' });
@@ -819,6 +841,7 @@ app.post('/api/admin/posts', adminOnly, (req, res) => {
   const eventId = audience === 'event' && Number(req.body.event_id) ? Number(req.body.event_id) : null;
   const result = db.prepare('INSERT INTO posts (title,content,audience,event_id,updated_at) VALUES (?,?,?,?,?)')
     .run(title, richTextHtml(req.body.content || ''), audience, eventId, nowIso());
+  if (audience === 'manual') savePostRecipients(Number(result.lastInsertRowid), manualRecipients(req.body.recipient_ids));
   res.json({ ok: true, id: Number(result.lastInsertRowid) });
 });
 app.post('/api/admin/posts/:id', adminOnly, (req, res) => {
@@ -829,6 +852,7 @@ app.post('/api/admin/posts/:id', adminOnly, (req, res) => {
   const result = db.prepare('UPDATE posts SET title=?, content=?, audience=?, event_id=?, updated_at=? WHERE id=?')
     .run(title, richTextHtml(req.body.content || ''), audience, eventId, nowIso(), req.params.id);
   if (!result.changes) return res.sendStatus(404);
+  savePostRecipients(Number(req.params.id), audience === 'manual' ? manualRecipients(req.body.recipient_ids) : []);
   res.json({ ok: true, id: Number(req.params.id) });
 });
 app.post('/api/admin/posts/:id/images', adminOnly, upload.array('images', 9), (req, res) => {
@@ -884,7 +908,8 @@ app.post('/api/admin/posts/:id/send', adminOnly, async (req, res) => {
     recipients = db.prepare(`SELECT c.telegram_id FROM conversations c
       WHERE NOT EXISTS(SELECT 1 FROM blocked_users b WHERE b.telegram_id=c.telegram_id)`).all();
   } else {
-    return res.status(400).json({ error: 'Для ручной аудитории пока выберите гостей в карточке поста' });
+    recipients = db.prepare(`SELECT r.telegram_id FROM post_recipients r
+      WHERE r.post_id=? AND NOT EXISTS(SELECT 1 FROM blocked_users b WHERE b.telegram_id=r.telegram_id)`).all(post.id);
   }
   if (!recipients.length) return res.status(400).json({ error: 'В выбранной аудитории пока нет доступных пользователей' });
   const images = db.prepare('SELECT * FROM post_images WHERE post_id=? ORDER BY position').all(post.id);

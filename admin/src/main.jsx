@@ -497,13 +497,21 @@ function Checkin({ event, onBack, onCheckedIn }) {
   </>;
 }
 
-function PostEditor({ post, events, postImages, postFiles, onSaved, onBack }) {
+function RecipientPicker({ people, selectedIds, setSelectedIds }) {
+  const [query, setQuery] = useState("");
+  const filtered = people.filter((person) => `${person.person_name || ""} ${person.telegram_name || ""} ${person.telegram_id}`.toLowerCase().includes(query.toLowerCase()));
+  const toggle = (telegramId) => setSelectedIds((current) => current.includes(telegramId) ? current.filter((id) => id !== telegramId) : [...current, telegramId]);
+  return <div className="rounded-md border p-3"><div className="flex items-center justify-between gap-3"><span className="text-sm font-medium">Получатели: {selectedIds.length}</span><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Поиск по имени или @username" className="h-8 max-w-xs" /></div><div className="mt-3 max-h-56 overflow-y-auto"><div className="grid gap-1">{filtered.map((person) => <label key={person.telegram_id} className="flex cursor-pointer items-center gap-3 rounded px-2 py-2 text-sm hover:bg-muted"><input type="checkbox" className="h-4 w-4 accent-foreground" checked={selectedIds.includes(person.telegram_id)} onChange={() => toggle(person.telegram_id)} /><span className="min-w-0"><b>{person.person_name || (person.telegram_name ? `@${person.telegram_name}` : `Telegram ${person.telegram_id}`)}</b>{person.telegram_name && person.person_name && <span className="ml-2 text-muted-foreground">@{person.telegram_name}</span>}</span></label>)}{!filtered.length && <p className="px-2 py-3 text-sm text-muted-foreground">Пользователи не найдены.</p>}</div></div></div>;
+}
+
+function PostEditor({ post, events, postImages, postFiles, postRecipients, conversations, onSaved, onBack }) {
   const [title, setTitle] = useState(post?.title || "");
   const [content, setContent] = useState(post?.content || "");
   const [audience, setAudience] = useState(post?.audience || "all");
   const [eventId, setEventId] = useState(post?.event_id ? String(post.event_id) : "");
   const [images, setImages] = useState(() => post ? postImages.filter((image) => image.post_id === post.id).map((image) => ({ id: image.id, serverId: image.id, url: `/api/admin/post-images/${image.id}` })) : []);
   const [files, setFiles] = useState(() => post ? postFiles.filter((file) => file.post_id === post.id).map((file) => ({ id: file.id, serverId: file.id, name: file.original_name, url: `/api/admin/post-files/${file.id}` })) : []);
+  const [recipientIds, setRecipientIds] = useState(() => post ? postRecipients.filter((recipient) => recipient.post_id === post.id).map((recipient) => recipient.telegram_id) : []);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState("");
@@ -511,11 +519,13 @@ function PostEditor({ post, events, postImages, postFiles, onSaved, onBack }) {
     setTitle(post?.title || ""); setContent(post?.content || ""); setAudience(post?.audience || "all"); setEventId(post?.event_id ? String(post.event_id) : "");
     setImages(post ? postImages.filter((image) => image.post_id === post.id).map((image) => ({ id: image.id, serverId: image.id, url: `/api/admin/post-images/${image.id}` })) : []);
     setFiles(post ? postFiles.filter((file) => file.post_id === post.id).map((file) => ({ id: file.id, serverId: file.id, name: file.original_name, url: `/api/admin/post-files/${file.id}` })) : []);
-  }, [post, postImages, postFiles]);
+    setRecipientIds(post ? postRecipients.filter((recipient) => recipient.post_id === post.id).map((recipient) => recipient.telegram_id) : []);
+  }, [post, postImages, postFiles, postRecipients]);
   const save = async () => {
     setSaving(true); setSaved(false); setError("");
     try {
-      const response = await request(post ? `/api/admin/posts/${post.id}` : "/api/admin/posts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title, content, audience, event_id: eventId }) });
+      if (audience === "manual" && !recipientIds.length) throw new Error("Выберите хотя бы одного получателя");
+      const response = await request(post ? `/api/admin/posts/${post.id}` : "/api/admin/posts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title, content, audience, event_id: eventId, recipient_ids: recipientIds }) });
       const data = await response.json();
       const postId = data.id;
       const originalImageIds = post ? postImages.filter((image) => image.post_id === post.id).map((image) => image.id) : [];
@@ -548,7 +558,7 @@ function PostEditor({ post, events, postImages, postFiles, onSaved, onBack }) {
   return <>
     <button onClick={onBack} className="mb-5 text-sm text-muted-foreground hover:text-foreground">← Все посты</button>
     <div className="flex flex-wrap items-end justify-between gap-3"><div><h1 className="text-3xl font-semibold tracking-tight">{post ? "Редактировать пост" : "Новый пост"}</h1><p className="mt-2 text-muted-foreground">Сохраните пост — позже его можно будет отредактировать и разослать повторно.</p></div><span className="text-xs text-muted-foreground">Пост пока остаётся черновиком.</span></div>
-    <Card className="mt-7 max-w-3xl"><CardContent className="grid gap-6 p-5 sm:p-6"><label className="grid gap-2 text-sm font-medium">Название для команды<Input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Например, напоминание после события" /></label><label className="grid gap-2 text-sm font-medium">Текст поста<RichTextEditor value={content} onChange={setContent} placeholder="Напишите сообщение для гостей" /></label><div className="grid gap-2 text-sm font-medium">Изображения<ImagePicker images={images} setImages={setImages} /></div><div className="grid gap-2 text-sm font-medium">Файлы<FilePicker files={files} setFiles={setFiles} /></div><div className="grid gap-2 sm:grid-cols-2"><label className="grid gap-1.5 text-sm font-medium">Аудитория<select value={audience} onChange={(event) => setAudience(event.target.value)} className="h-9 rounded-md border bg-background px-3 text-sm"><option value="all">Все, кто запустил бота</option><option value="event">Гости конкретного мероприятия</option><option value="manual">Выбрать гостей вручную</option></select></label>{audience === "event" && <label className="grid gap-1.5 text-sm font-medium">Мероприятие<select value={eventId} onChange={(event) => setEventId(event.target.value)} className="h-9 rounded-md border bg-background px-3 text-sm"><option value="">Выберите мероприятие</option>{events.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label>}</div>{error && <p className="text-sm text-destructive">{error}</p>}<div className="flex justify-end gap-2"><Button variant="outline" onClick={onBack}>Назад</Button><Button onClick={save} disabled={saving || !title.trim() || (audience === "event" && !eventId)}>{saving ? "Сохраняем…" : saved ? "Сохранено" : "Сохранить черновик"}</Button></div></CardContent></Card>
+    <Card className="mt-7 max-w-3xl"><CardContent className="grid gap-6 p-5 sm:p-6"><label className="grid gap-2 text-sm font-medium">Название для команды<Input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Например, напоминание после события" /></label><label className="grid gap-2 text-sm font-medium">Текст поста<RichTextEditor value={content} onChange={setContent} placeholder="Напишите сообщение для гостей" /></label><div className="grid gap-2 text-sm font-medium">Изображения<ImagePicker images={images} setImages={setImages} /></div><div className="grid gap-2 text-sm font-medium">Файлы<FilePicker files={files} setFiles={setFiles} /></div><div className="grid gap-2 sm:grid-cols-2"><label className="grid gap-1.5 text-sm font-medium">Аудитория<select value={audience} onChange={(event) => setAudience(event.target.value)} className="h-9 rounded-md border bg-background px-3 text-sm"><option value="all">Все, кто запустил бота</option><option value="event">Гости конкретного мероприятия</option><option value="manual">Выбрать гостей вручную</option></select></label>{audience === "event" && <label className="grid gap-1.5 text-sm font-medium">Мероприятие<select value={eventId} onChange={(event) => setEventId(event.target.value)} className="h-9 rounded-md border bg-background px-3 text-sm"><option value="">Выберите мероприятие</option>{events.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label>}</div>{audience === "manual" && <RecipientPicker people={conversations} selectedIds={recipientIds} setSelectedIds={setRecipientIds} />}{error && <p className="text-sm text-destructive">{error}</p>}<div className="flex justify-end gap-2"><Button variant="outline" onClick={onBack}>Назад</Button><Button onClick={save} disabled={saving || !title.trim() || (audience === "event" && !eventId)}>{saving ? "Сохраняем…" : saved ? "Сохранено" : "Сохранить черновик"}</Button></div></CardContent></Card>
   </>;
 }
 
@@ -627,6 +637,7 @@ function App() {
     guests: [],
     assets: [],
     posts: [],
+    postRecipients: [],
     conversations: [],
     adminUsers: [],
     auditLog: [],
@@ -747,7 +758,7 @@ function App() {
   });
   const sendPost = (post) => setConfirm({
     title: `Отправить пост «${post.title}»?`,
-    description: post.audience === "all" ? "Сообщение уйдёт всем доступным пользователям, которые запустили бота." : post.audience === "event" ? "Сообщение уйдёт всем доступным гостям выбранного мероприятия." : "Для ручной аудитории сначала нужно выбрать получателей.",
+    description: post.audience === "all" ? "Сообщение уйдёт всем доступным пользователям, которые запустили бота." : post.audience === "event" ? "Сообщение уйдёт всем доступным гостям выбранного мероприятия." : `Сообщение уйдёт выбранным пользователям: ${state.postRecipients.filter((recipient) => recipient.post_id === post.id).length}.`,
     confirmLabel: "Отправить",
     workingLabel: "Отправляем…",
     action: async () => {
@@ -1059,7 +1070,7 @@ function App() {
           )}
           {page === "dialogs" && <Dialogs conversations={state.conversations || []} activeId={activeDialog} conversation={dialog} messages={dialogMessages} onOpen={loadDialog} onSend={async (text) => { await request(`/api/admin/dialogs/${encodeURIComponent(activeDialog)}/reply`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) }); await loadDialog(activeDialog); }} />}
           {page === "team" && <TeamSettings currentUser={state.currentUser} users={state.adminUsers || []} auditLog={state.auditLog || []} onChanged={() => load(active)} />}
-          {page === "postEditor" && <PostEditor post={activeBroadcast ? state.posts.find((post) => post.id === activeBroadcast) : null} events={state.events} postImages={state.postImages || []} postFiles={state.postFiles || []} onSaved={async (id) => { setActiveBroadcast(id); await load(active); }} onBack={() => setPage("posts")} />}
+          {page === "postEditor" && <PostEditor post={activeBroadcast ? state.posts.find((post) => post.id === activeBroadcast) : null} events={state.events} postImages={state.postImages || []} postFiles={state.postFiles || []} postRecipients={state.postRecipients || []} conversations={state.conversations || []} onSaved={async (id) => { setActiveBroadcast(id); await load(active); }} onBack={() => setPage("posts")} />}
       </main>
       <CreateDialog open={open} setOpen={setOpen} create={create} />
       <ConfirmDialog item={confirm} onClose={() => setConfirm(null)} />
