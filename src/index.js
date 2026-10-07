@@ -380,8 +380,7 @@ async function continueStart(ctx, claim) {
   if (eventMatch) {
     const event = db.prepare('SELECT * FROM events WHERE id=?').get(eventMatch[1]);
     if (!event) return ctx.reply('Это мероприятие не найдено или уже недоступно.');
-    const date = new Date(event.starts_at).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', dateStyle: 'long', timeStyle: 'short' });
-    const details = [event.registration_text || event.description, event.venue && `📍 ${event.venue}`, `🗓 ${date}`, event.registration_open ? 'Регистрация открыта' : 'Регистрация закрыта'].filter(Boolean).join('\n\n');
+    const details = [event.registration_text || event.description, event.registration_open ? 'Регистрация открыта' : 'Регистрация закрыта'].filter(Boolean).join('\n\n');
     const existing = db.prepare('SELECT status FROM applicants WHERE event_id=? AND telegram_id=?').get(event.id, String(ctx.from.id));
     if (existing && existing.status !== 'cancelled') return ctx.reply(`Вы уже подали заявку на «${event.title}». Сейчас: ${userStatus[existing.status] || existing.status}.`, { reply_markup: mainKeyboard() });
     const keyboard = event.registration_open ? new InlineKeyboard().text('Подать заявку', `apply:${event.id}`) : undefined;
@@ -562,7 +561,6 @@ async function showMyApplications(ctx) {
   if (!applications.length) return ctx.reply('У вас пока нет регистраций. Откройте «Мероприятия», чтобы выбрать событие.', { reply_markup: mainKeyboard() });
   for (const application of applications) {
     const status = application.invitation_status || application.status;
-    const date = new Date(application.starts_at).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', dateStyle: 'medium', timeStyle: 'short' });
     const completedStatuses = new Set(['cancelled', 'declined', 'rejected', 'expired', 'final_expired']);
     const keyboard = completedStatuses.has(status) || completedStatuses.has(application.status)
       ? undefined
@@ -571,7 +569,6 @@ async function showMyApplications(ctx) {
     const text = [
       `<b>«${esc(application.title)}»</b>`,
       announcement && telegramHtml(announcement).trim(),
-      `🗓 ${esc(date)}${application.venue ? `\n📍 ${esc(application.venue)}` : ''}`,
       `Статус: ${esc(userStatus[status] || status)}`,
     ].filter(Boolean).join('\n\n');
     await ctx.reply(text, messageOptions({ reply_markup: keyboard }));
