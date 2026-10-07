@@ -247,12 +247,26 @@ function auditFallback(method, path) {
   if (method === 'POST' && /\/api\/admin\/events\/\d+$/.test(path)) return 'Изменил мероприятие';
   if (method === 'DELETE' && /\/api\/admin\/events\/\d+$/.test(path)) return 'Удалил мероприятие';
   if (method === 'POST' && /\/api\/admin\/events\/\d+\/texts$/.test(path)) return 'Изменил тексты мероприятия';
+  if (method === 'POST' && /\/api\/admin\/events\/\d+\/registration$/.test(path)) return 'Изменил регистрацию мероприятия';
+  if (method === 'POST' && /\/api\/admin\/events\/\d+\/invitations$/.test(path)) return 'Отправил приглашения';
   if (method === 'POST' && /\/api\/admin\/posts$/.test(path)) return 'Создал пост';
   if (method === 'POST' && /\/api\/admin\/posts\/\d+$/.test(path)) return 'Изменил пост';
+  if (method === 'POST' && /\/api\/admin\/posts\/\d+\/send$/.test(path)) return 'Отправил пост';
+  if (method === 'POST' && path === '/api/admin/checkin') return 'Отметил гостя на чек-ине';
   if (method === 'DELETE' && /\/api\/admin\/applicants\/\d+$/.test(path)) return 'Удалил регистрацию гостя';
   if (method === 'POST' && /\/api\/admin\/applicants\/\d+\/block$/.test(path)) return 'Изменил доступ гостя к боту';
+  if (method === 'POST' && path === '/api/admin/users') return 'Создал учётную запись';
+  if (method === 'POST' && /\/api\/admin\/users\/\d+\/status$/.test(path)) return 'Изменил доступ сотрудника';
+  if (method === 'POST' && path === '/api/admin/account/password') return 'Изменил пароль';
   return 'Изменил данные в системе';
 }
+
+// До появления полей action/details журнал хранил только технический маршрут.
+// Переводим прежние записи один раз при запуске, чтобы старая история тоже была читаемой.
+const legacyAuditRows = db.prepare("SELECT id, method, path FROM admin_audit_log WHERE action IS NULL OR TRIM(action) = ''").all();
+const updateLegacyAuditAction = db.prepare('UPDATE admin_audit_log SET action=? WHERE id=?');
+for (const entry of legacyAuditRows) updateLegacyAuditAction.run(auditFallback(entry.method, entry.path), entry.id);
+
 function setAudit(req, action, details = null) {
   req.auditAction = action;
   req.auditDetails = details;
@@ -631,7 +645,8 @@ app.post('/login', (req, res) => {
   db.prepare('DELETE FROM admin_sessions WHERE expires_at <= ?').run(Date.now());
   db.prepare('INSERT INTO admin_sessions (id,user_id,expires_at) VALUES (?,?,?)').run(sessionId, user.id, Date.now() + sessionDurationMs);
   db.prepare('UPDATE admin_users SET last_login_at=? WHERE id=?').run(nowIso(), user.id);
-  db.prepare('INSERT INTO admin_audit_log (admin_user_id,username,method,path,status_code) VALUES (?,?,?,?,?)').run(user.id, user.username, 'POST', '/login', 302);
+  db.prepare('INSERT INTO admin_audit_log (admin_user_id,username,method,path,status_code,action) VALUES (?,?,?,?,?,?)')
+    .run(user.id, user.username, 'POST', '/login', 302, 'Вошёл в систему');
   res.set('Set-Cookie', sessionCookie(sessionId));
   return res.redirect('/admin');
 });
