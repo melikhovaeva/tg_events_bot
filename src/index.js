@@ -23,7 +23,7 @@ db.exec(`
 CREATE TABLE IF NOT EXISTS events (
   id INTEGER PRIMARY KEY, title TEXT NOT NULL, starts_at TEXT NOT NULL,
   description TEXT, venue TEXT, chat_url TEXT, cover_stored_name TEXT, cover_original_name TEXT, registration_text TEXT, received_text TEXT,
-  invite_text TEXT, expired_text TEXT, confirmed_text TEXT, declined_text TEXT, reminder_text TEXT,
+  invite_text TEXT, expired_text TEXT, confirmed_text TEXT, declined_text TEXT, rejected_text TEXT, reminder_text TEXT,
   registration_open INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -132,7 +132,7 @@ CREATE TABLE IF NOT EXISTS admin_audit_log (
 for (const [table, column, definition] of [
   ['events', 'description', 'TEXT'], ['events', 'venue', 'TEXT'], ['applicants', 'phone', 'TEXT'],
   ['events', 'registration_text', 'TEXT'], ['events', 'received_text', 'TEXT'], ['events', 'invite_text', 'TEXT'],
-  ['events', 'confirmed_text', 'TEXT'], ['events', 'declined_text', 'TEXT'], ['events', 'reminder_text', 'TEXT'],
+  ['events', 'confirmed_text', 'TEXT'], ['events', 'declined_text', 'TEXT'], ['events', 'rejected_text', 'TEXT'], ['events', 'reminder_text', 'TEXT'],
   ['events', 'expired_text', 'TEXT'], ['invitations', 'final_confirmed_at', 'TEXT'], ['invitations', 'final_expires_at', 'TEXT'],
   ['events', 'cover_stored_name', 'TEXT'], ['events', 'cover_original_name', 'TEXT'],
   ['events', 'registration_open', 'INTEGER NOT NULL DEFAULT 1'],
@@ -165,7 +165,7 @@ const userStatus = {
   awaiting_review: 'заявка рассматривается', pending: 'ждём ответа на приглашение',
   invited: 'ждём ответа на приглашение', confirmed: 'участие подтверждено',
   delivery_failed: 'приглашение пока не доставлено — мы попробуем отправить его ещё раз',
-  declined: 'участие отменено', expired: 'ответ не получен',
+  declined: 'участие отменено', rejected: 'организатор пока не может пригласить вас', expired: 'ответ не получен',
   final_expired: 'финальное подтверждение не получено', cancelled: 'регистрация отменена',
 };
 function recordConversationMessage(telegramId, telegramName, direction, text) {
@@ -254,6 +254,7 @@ function auditFallback(method, path) {
   if (method === 'POST' && /\/api\/admin\/posts\/\d+\/send$/.test(path)) return 'Отправил пост';
   if (method === 'POST' && path === '/api/admin/checkin') return 'Отметил гостя на чек-ине';
   if (method === 'DELETE' && /\/api\/admin\/applicants\/\d+$/.test(path)) return 'Удалил регистрацию гостя';
+  if (method === 'POST' && /\/api\/admin\/applicants\/\d+\/reject$/.test(path)) return 'Отказал в приглашении';
   if (method === 'POST' && /\/api\/admin\/applicants\/\d+\/block$/.test(path)) return 'Изменил доступ гостя к боту';
   if (method === 'POST' && path === '/api/admin/users') return 'Создал учётную запись';
   if (method === 'POST' && /\/api\/admin\/users\/\d+\/status$/.test(path)) return 'Изменил доступ сотрудника';
@@ -266,6 +267,15 @@ function auditFallback(method, path) {
 const legacyAuditRows = db.prepare("SELECT id, method, path FROM admin_audit_log WHERE action IS NULL OR TRIM(action) = ''").all();
 const updateLegacyAuditAction = db.prepare('UPDATE admin_audit_log SET action=? WHERE id=?');
 for (const entry of legacyAuditRows) updateLegacyAuditAction.run(auditFallback(entry.method, entry.path), entry.id);
+
+const auditPageSize = 20;
+function auditLogPage(beforeId = null) {
+  const before = Number(beforeId);
+  const rows = Number.isInteger(before) && before > 0
+    ? db.prepare('SELECT * FROM admin_audit_log WHERE id<? ORDER BY id DESC LIMIT ?').all(before, auditPageSize + 1)
+    : db.prepare('SELECT * FROM admin_audit_log ORDER BY id DESC LIMIT ?').all(auditPageSize + 1);
+  return { entries: rows.slice(0, auditPageSize), hasMore: rows.length > auditPageSize };
+}
 
 function setAudit(req, action, details = null) {
   req.auditAction = action;
@@ -541,7 +551,7 @@ async function showMyApplications(ctx) {
   for (const application of applications) {
     const status = application.invitation_status || application.status;
     const date = new Date(application.starts_at).toLocaleString('ru-RU', { dateStyle: 'medium', timeStyle: 'short' });
-    const completedStatuses = new Set(['cancelled', 'declined', 'expired', 'final_expired']);
+    const completedStatuses = new Set(['cancelled', 'declined', 'rejected', 'expired', 'final_expired']);
     const keyboard = completedStatuses.has(status) || completedStatuses.has(application.status)
       ? undefined
       : new InlineKeyboard().text('Отменить регистрацию', `withdraw:${application.id}`);
@@ -688,9 +698,10 @@ app.get('/api/admin/state', adminOnly, (req, res) => {
   const postSendSummaries = req.adminUser.role === 'assistant' ? [] : db.prepare(`SELECT s.* FROM post_sends s
     JOIN (SELECT post_id, MAX(id) AS id FROM post_sends GROUP BY post_id) latest ON latest.id=s.id`).all();
   const adminUsers = req.adminUser.role === 'admin' ? db.prepare('SELECT u.id,u.username,u.display_name,u.role,u.is_active,u.event_id,u.created_at,u.last_login_at,e.title AS event_title FROM admin_users u LEFT JOIN events e ON e.id=u.event_id ORDER BY u.role, u.display_name').all() : [];
-  const auditLog = req.adminUser.role === 'admin' ? db.prepare('SELECT * FROM admin_audit_log ORDER BY id DESC LIMIT 60').all() : [];
-  res.json({ events, selected, people, assets, guests, messageImages, eventImages, posts, postImages, postFiles, postRecipients, postSendSummaries, conversations, adminUsers, auditLog, currentUser: req.adminUser, botUsername: process.env.BOT_USERNAME });
+  const audit = req.adminUser.role === 'admin' ? auditLogPage() : { entries: [], hasMore: false };
+  res.json({ events, selected, people, assets, guests, messageImages, eventImages, posts, postImages, postFiles, postRecipients, postSendSummaries, conversations, adminUsers, auditLog: audit.entries, auditHasMore: audit.hasMore, currentUser: req.adminUser, botUsername: process.env.BOT_USERNAME });
 });
+app.get('/api/admin/audit', primaryAdminOnly, (req, res) => res.json(auditLogPage(req.query.before)));
 app.post('/api/admin/account/password', adminOnly, (req, res) => {
   const currentPassword = String(req.body.current_password || '');
   const newPassword = String(req.body.new_password || '');
@@ -768,8 +779,8 @@ app.post('/admin/events/:id/settings', adminOnly, (req, res) => {
   res.redirect(`/admin?event=${req.params.id}`);
 });
 app.post('/api/admin/events/:id/texts', adminOnly, (req, res) => {
-  db.prepare('UPDATE events SET description=?, invite_text=?, expired_text=?, confirmed_text=?, reminder_text=?, declined_text=? WHERE id=?')
-    .run(richTextHtml(req.body.description || '') || null, richTextHtml(req.body.invite_text || '') || null, richTextHtml(req.body.expired_text || '') || null, richTextHtml(req.body.confirmed_text || '') || null, richTextHtml(req.body.reminder_text || '') || null, richTextHtml(req.body.declined_text || '') || null, req.params.id);
+  db.prepare('UPDATE events SET description=?, invite_text=?, expired_text=?, confirmed_text=?, reminder_text=?, declined_text=?, rejected_text=? WHERE id=?')
+    .run(richTextHtml(req.body.description || '') || null, richTextHtml(req.body.invite_text || '') || null, richTextHtml(req.body.expired_text || '') || null, richTextHtml(req.body.confirmed_text || '') || null, richTextHtml(req.body.reminder_text || '') || null, richTextHtml(req.body.declined_text || '') || null, richTextHtml(req.body.rejected_text || '') || null, req.params.id);
   res.json({ ok: true });
 });
 app.post('/api/admin/events/:id/registration', adminOnly, (req, res) => {
@@ -813,6 +824,25 @@ app.post('/api/admin/applicants/:id/block', adminOnly, (req, res) => {
   if (!applicant.telegram_id) return res.status(400).json({ error: 'Гость ещё не подключил Telegram' });
   if (req.body.blocked) db.prepare('INSERT OR IGNORE INTO blocked_users (telegram_id) VALUES (?)').run(applicant.telegram_id);
   else db.prepare('DELETE FROM blocked_users WHERE telegram_id=?').run(applicant.telegram_id);
+  res.json({ ok: true });
+});
+app.post('/api/admin/applicants/:id/reject', adminOnly, async (req, res) => {
+  const person = db.prepare(`SELECT a.*, e.id AS event_id, e.title, e.rejected_text
+    FROM applicants a JOIN events e ON e.id=a.event_id WHERE a.id=?`).get(req.params.id);
+  if (!person) return res.sendStatus(404);
+  if (!person.telegram_id) return res.status(400).json({ error: 'Гость ещё не запустил бота — отправить отказ в Telegram нельзя' });
+  if (db.prepare('SELECT 1 FROM blocked_users WHERE telegram_id=?').get(person.telegram_id)) return res.status(400).json({ error: 'Доступ гостя к боту ограничен' });
+  try {
+    await bot.api.sendMessage(person.telegram_id, eventText(person, 'rejected'), messageOptions());
+    await sendMessageImages(person.telegram_id, person.event_id, 'rejected');
+  } catch (error) {
+    return res.status(502).json({ error: `Telegram не доставил отказ: ${error.description || error.message}` });
+  }
+  db.transaction(() => {
+    db.prepare("UPDATE applicants SET status='rejected' WHERE id=?").run(person.id);
+    db.prepare("UPDATE invitations SET status='rejected', responded_at=? WHERE applicant_id=?").run(nowIso(), person.id);
+  })();
+  setAudit(req, 'Отказал в приглашении', `${person.name} · ${person.title}`);
   res.json({ ok: true });
 });
 app.post('/api/admin/events/:id/invitations', adminOnly, async (req, res) => {
@@ -1043,7 +1073,7 @@ app.post('/api/admin/posts/:id/send', adminOnly, async (req, res) => {
   res.json({ ok: true, sent: sent.length, skipped, sendId: Number(send.lastInsertRowid) });
 });
 app.post('/api/admin/events/:id/message-images/:key', adminOnly, upload.array('images', 9), (req, res) => {
-  const messageKeys = new Set(['registration', 'invite', 'expired', 'confirmed', 'declined', 'reminder']);
+  const messageKeys = new Set(['registration', 'invite', 'expired', 'confirmed', 'declined', 'rejected', 'reminder']);
   if (!messageKeys.has(req.params.key)) return res.status(400).json({ error: 'Неизвестный тип сообщения' });
   const files = req.files || [];
   if (files.some(file => !file.mimetype.startsWith('image/'))) return res.status(400).json({ error: 'Можно загрузить только изображения' });

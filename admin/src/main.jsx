@@ -71,6 +71,7 @@ const statusNames = {
   delivery_failed: "Приглашение не доставлено",
   confirmed: "Подтвердил",
   declined: "Отказался",
+  rejected: "Отказ организатора",
   expired: "Не ответил за 24 часа",
   final_expired: "Не подтвердил за 6 часов",
   cancelled: "Отменил регистрацию",
@@ -464,6 +465,14 @@ const textPosts = [
     hint: "Отправляется, если гость отказался или отменил участие.",
     placeholder:
       "Спасибо, что сообщили. Будем рады видеть вас на следующих мероприятиях!",
+  },
+  {
+    key: "rejected",
+    field: "rejected_text",
+    title: "Отказ организатора",
+    hint: "Отправляется, когда вы вручную сообщаете гостю, что не можете пригласить его.",
+    placeholder:
+      "Спасибо за заявку. К сожалению, сейчас мы не сможем пригласить вас на мероприятие.",
   },
   {
     key: "reminder",
@@ -1769,7 +1778,7 @@ function auditLabel(entry) {
   return "Изменил данные в системе";
 }
 
-function TeamSettings({ currentUser, users, events, auditLog, onChanged }) {
+function TeamSettings({ currentUser, users, events, auditLog, auditHasMore, onChanged }) {
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [name, setName] = useState("");
@@ -1779,6 +1788,28 @@ function TeamSettings({ currentUser, users, events, auditLog, onChanged }) {
   const [eventId, setEventId] = useState("");
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
+  const [auditEntries, setAuditEntries] = useState(auditLog);
+  const [hasMoreAudit, setHasMoreAudit] = useState(auditHasMore);
+  const [loadingMoreAudit, setLoadingMoreAudit] = useState(false);
+  useEffect(() => {
+    setAuditEntries(auditLog);
+    setHasMoreAudit(auditHasMore);
+  }, [auditLog, auditHasMore]);
+  const loadMoreAudit = async () => {
+    const last = auditEntries[auditEntries.length - 1];
+    if (!last || loadingMoreAudit) return;
+    setLoadingMoreAudit(true);
+    try {
+      const response = await request(`/api/admin/audit?before=${last.id}`);
+      const result = await response.json();
+      setAuditEntries((current) => [...current, ...result.entries]);
+      setHasMoreAudit(result.hasMore);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setLoadingMoreAudit(false);
+    }
+  };
   const changePassword = async (event) => {
     event.preventDefault();
     setError("");
@@ -1999,7 +2030,7 @@ function TeamSettings({ currentUser, users, events, auditLog, onChanged }) {
             <CardHeader>
               <CardTitle>Журнал действий</CardTitle>
               <CardDescription>
-                Последние 60 действий в личном кабинете.
+                Последние 20 действий в личном кабинете.
               </CardDescription>
             </CardHeader>
             <CardContent className="overflow-x-auto">
@@ -2013,7 +2044,7 @@ function TeamSettings({ currentUser, users, events, auditLog, onChanged }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {auditLog.map((entry) => (
+                  {auditEntries.map((entry) => (
                     <tr key={entry.id} className="border-b last:border-0">
                       <td className="py-3 text-muted-foreground">
                         {fmt(entry.created_at)}
@@ -2028,6 +2059,16 @@ function TeamSettings({ currentUser, users, events, auditLog, onChanged }) {
                   ))}
                 </tbody>
               </table>
+              {hasMoreAudit && (
+                <Button
+                  variant="outline"
+                  className="mt-4"
+                  onClick={loadMoreAudit}
+                  disabled={loadingMoreAudit}
+                >
+                  {loadingMoreAudit ? "Загружаем…" : "Показать ещё 20"}
+                </Button>
+              )}
             </CardContent>
           </Card>
         </>
@@ -2045,10 +2086,10 @@ function guestStatus(person) {
   return statusNames[person.invitation_status || person.status] || "—";
 }
 
-function GuestCards({ people, assistant = false, hideSearch = false, onInvite, invitingIds = [], onBlock, onRemove }) {
+function GuestCards({ people, assistant = false, hideSearch = false, onInvite, invitingIds = [], onReject, onBlock, onRemove }) {
   const [query, setQuery] = useState("");
   const filtered = people.filter((person) => `${person.name || ""} ${person.telegram_name || ""}`.toLowerCase().includes(query.trim().toLowerCase()));
-  return <div className="md:hidden">{!hideSearch && <Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Найти по фамилии или @username" className="mb-3" />}<div className="grid gap-2">{filtered.map((person) => <div key={person.id} className="rounded-lg border bg-card p-4"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="font-semibold">{person.name}</p>{person.telegram_name && <p className="mt-0.5 text-sm text-muted-foreground">@{person.telegram_name}</p>}{!assistant && <p className="mt-0.5 text-sm text-muted-foreground">{person.phone}</p>}</div><span className="shrink-0 rounded-full bg-muted px-2 py-1 text-xs font-medium">{guestStatus(person)}</span></div>{!assistant && <div className="mt-3 flex flex-wrap gap-2">{person.telegram_id && !person.blocked && person.invitation_status !== "confirmed" && <Button size="sm" onClick={() => onInvite(person.id)} disabled={invitingIds.includes(person.id)}><Send size={14} />{invitingIds.includes(person.id) ? "Отправляем…" : "Пригласить"}</Button>}{person.telegram_id && <Button variant="outline" size="sm" onClick={() => onBlock(person)}>{person.blocked ? "Вернуть доступ" : "Ограничить доступ"}</Button>}<Button variant="outline" size="sm" className="text-destructive hover:text-destructive" onClick={() => onRemove(person)}>Удалить</Button></div>}</div>)}{!filtered.length && <p className="rounded-lg border p-4 text-sm text-muted-foreground">Гость не найден.</p>}</div></div>;
+  return <div className="md:hidden">{!hideSearch && <Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Найти по фамилии или @username" className="mb-3" />}<div className="grid gap-2">{filtered.map((person) => <div key={person.id} className="rounded-lg border bg-card p-4"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="font-semibold">{person.name}</p>{person.telegram_name && <p className="mt-0.5 text-sm text-muted-foreground">@{person.telegram_name}</p>}{!assistant && <p className="mt-0.5 text-sm text-muted-foreground">{person.phone}</p>}</div><span className="shrink-0 rounded-full bg-muted px-2 py-1 text-xs font-medium">{guestStatus(person)}</span></div>{!assistant && <div className="mt-3 flex flex-wrap gap-2">{person.telegram_id && !person.blocked && person.invitation_status !== "confirmed" && <Button size="sm" onClick={() => onInvite(person.id)} disabled={invitingIds.includes(person.id)}><Send size={14} />{invitingIds.includes(person.id) ? "Отправляем…" : "Пригласить"}</Button>}{person.telegram_id && !person.blocked && person.invitation_status !== "confirmed" && <Button variant="outline" size="sm" className="text-destructive hover:text-destructive" onClick={() => onReject(person)}><X size={14} />Отказать</Button>}{person.telegram_id && <Button variant="outline" size="sm" onClick={() => onBlock(person)}>{person.blocked ? "Вернуть доступ" : "Ограничить доступ"}</Button>}<Button variant="outline" size="sm" className="text-destructive hover:text-destructive" onClick={() => onRemove(person)}>Удалить</Button></div>}</div>)}{!filtered.length && <p className="rounded-lg border p-4 text-sm text-muted-foreground">Гость не найден.</p>}</div></div>;
 }
 
 function AssistantEvent({ event, people, onCheckin }) {
@@ -2076,6 +2117,7 @@ function App() {
     conversations: [],
     adminUsers: [],
     auditLog: [],
+    auditHasMore: false,
   });
   const [page, setPage] = useState(initialPage);
   const [active, setActive] = useState(initialEvent);
@@ -2332,6 +2374,19 @@ function App() {
         await request(`/api/admin/applicants/${person.id}`, {
           method: "DELETE",
         });
+        await load(event.id);
+      },
+    });
+  const rejectApplicant = (person) =>
+    setConfirm({
+      title: "Отправить отказ?",
+      description: `${person.name} получит текст «Отказ организатора» из раздела «Тексты события». После этого его всё равно можно будет пригласить повторно.`,
+      confirmLabel: "Отправить отказ",
+      destructive: true,
+      action: async () => {
+        await request(`/api/admin/applicants/${person.id}/reject`, { method: "POST" });
+        setNotice(`Отказ отправлен: ${person.name}.`);
+        window.setTimeout(() => setNotice(""), 3500);
         await load(event.id);
       },
     });
@@ -2631,7 +2686,7 @@ function App() {
                 </p>
               )}
               <CardContent className="overflow-x-auto">
-                <GuestCards people={state.people} onInvite={invite} invitingIds={invitingIds} onBlock={toggleBlock} onRemove={removeApplicant} />
+                <GuestCards people={state.people} onInvite={invite} invitingIds={invitingIds} onReject={rejectApplicant} onBlock={toggleBlock} onRemove={removeApplicant} />
                 <div className="hidden overflow-x-auto md:block"><table className="w-full min-w-[620px] text-sm">
                   <thead>
                     <tr className="border-b text-left text-muted-foreground">
@@ -2737,6 +2792,20 @@ function App() {
                                     : "Пригласить"}
                                 </Button>
                               )}
+                            {p.telegram_id &&
+                              !p.blocked &&
+                              p.invitation_status !== "confirmed" && (
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="text-destructive hover:text-destructive"
+                                  title="Отправить отказ"
+                                  aria-label="Отправить отказ"
+                                  onClick={() => rejectApplicant(p)}
+                                >
+                                  <X size={14} />
+                                </Button>
+                              )}
                             {p.telegram_id && (
                               <Button
                                 variant="outline"
@@ -2788,7 +2857,7 @@ function App() {
               Тексты события
             </h1>
             <p className="mt-2 text-muted-foreground">
-              Шесть сообщений для пути гостя — каждое с собственным текстом и
+              Семь сообщений для пути гостя — каждое с собственным текстом и
               изображениями.
             </p>
             <EventTexts
@@ -3015,6 +3084,7 @@ function App() {
             users={state.adminUsers || []}
             events={state.events || []}
             auditLog={state.auditLog || []}
+            auditHasMore={state.auditHasMore}
             onChanged={() => load(active)}
           />
         )}
