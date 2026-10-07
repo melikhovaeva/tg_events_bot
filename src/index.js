@@ -134,6 +134,7 @@ for (const [table, column, definition] of [
   ['events', 'registration_text', 'TEXT'], ['events', 'received_text', 'TEXT'], ['events', 'invite_text', 'TEXT'],
   ['events', 'confirmed_text', 'TEXT'], ['events', 'declined_text', 'TEXT'], ['events', 'rejected_text', 'TEXT'], ['events', 'reminder_text', 'TEXT'],
   ['events', 'expired_text', 'TEXT'], ['invitations', 'final_confirmed_at', 'TEXT'], ['invitations', 'final_expires_at', 'TEXT'],
+  ['events', 'final_confirmed_text', 'TEXT'], ['events', 'final_declined_text', 'TEXT'],
   ['events', 'cover_stored_name', 'TEXT'], ['events', 'cover_original_name', 'TEXT'],
   ['events', 'registration_open', 'INTEGER NOT NULL DEFAULT 1'],
   ['applicants', 'was_school_student', 'INTEGER'],
@@ -310,6 +311,16 @@ const primaryAdminOnly = (req, res, next) => adminOnly(req, res, () => {
 const bot = new Bot(process.env.BOT_TOKEN || '');
 const botEnabled = Boolean(process.env.BOT_TOKEN) && process.env.BOT_ENABLED !== 'false';
 const { runAutomation, sendAssets, sendInvite, sendMessageImages, updateInviteAttempt } = createInvitationService({ db, bot });
+async function sendCheckinQr(ctx, row, checkinToken, qr) {
+  const event = db.prepare('SELECT * FROM events WHERE id=?').get(row.event_id);
+  const caption = `${eventText(event, 'final_confirmed').trim()}\n\nРезервный код: ${checkinToken.slice(0, 8).toUpperCase()}`;
+  if (caption.length <= 1024) await ctx.replyWithPhoto(new InputFile(qr, 'checkin.png'), messageOptions({ caption }));
+  else {
+    await ctx.replyWithPhoto(new InputFile(qr, 'checkin.png'));
+    await ctx.reply(caption, messageOptions());
+  }
+  await sendMessageImages(row.telegram_id, row.event_id, 'final_confirmed');
+}
 const transcriptForApiCall = (method, payload) => {
   if (method === 'sendMessage') return payload.text;
   if (method === 'sendPhoto') return payload.caption || '🖼 Изображение';
@@ -607,7 +618,7 @@ bot.callbackQuery(/^answer:(yes|no):(\d+)$/, async ctx => {
     if (directCheckin) {
       const qr = await QRCode.toBuffer(checkinToken, { width: 900, margin: 4, errorCorrectionLevel: 'H' });
       await sendAssets(row.telegram_id, row.event_id, 'confirmed');
-      await ctx.replyWithPhoto(new InputFile(qr, 'checkin.png'), { caption: `Ваш QR для входа на «${row.title}». Сохраните его.\nРезервный код: ${checkinToken.slice(0, 8).toUpperCase()}` });
+      await sendCheckinQr(ctx, row, checkinToken, qr);
     }
   }
   return;
@@ -625,17 +636,17 @@ bot.callbackQuery(/^cancel:(\d+)$/, async ctx => {
 });
 bot.callbackQuery(/^final:(yes|no):(\d+)$/, async ctx => {
   const [, answer, id] = ctx.match;
-  const row = db.prepare('SELECT i.*, a.telegram_id, a.id applicant_id, e.id event_id, e.declined_text, e.title FROM invitations i JOIN applicants a ON a.id=i.applicant_id JOIN events e ON e.id=a.event_id WHERE i.id=?').get(id);
+  const row = db.prepare('SELECT i.*, a.telegram_id, a.id applicant_id, e.id event_id, e.final_declined_text, e.title FROM invitations i JOIN applicants a ON a.id=i.applicant_id JOIN events e ON e.id=a.event_id WHERE i.id=?').get(id);
   if (!row || row.telegram_id !== String(ctx.from.id) || row.status !== 'confirmed') return ctx.answerCallbackQuery({ text: 'Приглашение не найдено.', show_alert: true });
   if (row.final_confirmed_at || !row.final_expires_at || new Date(row.final_expires_at) <= new Date()) return ctx.answerCallbackQuery({ text: 'Срок финального подтверждения закончился.', show_alert: true });
   await ctx.answerCallbackQuery({ text: answer === 'yes' ? 'Подтверждение сохранено' : 'Участие отменено' });
-  if (answer === 'no') { db.prepare("UPDATE invitations SET status='declined', responded_at=? WHERE id=?").run(nowIso(), id); updateInviteAttempt(id, 'declined', true); db.prepare("UPDATE applicants SET status='declined' WHERE id=?").run(row.applicant_id); await ctx.editMessageText(eventText(row, 'declined'), messageOptions()); await sendMessageImages(row.telegram_id, row.event_id, 'declined'); return; }
+  if (answer === 'no') { db.prepare("UPDATE invitations SET status='declined', responded_at=? WHERE id=?").run(nowIso(), id); updateInviteAttempt(id, 'declined', true); db.prepare("UPDATE applicants SET status='declined' WHERE id=?").run(row.applicant_id); await ctx.editMessageText(eventText(row, 'final_declined'), messageOptions()); await sendMessageImages(row.telegram_id, row.event_id, 'final_declined'); return; }
   const checkinToken = token();
   db.prepare('UPDATE invitations SET final_confirmed_at=?,checkin_token=? WHERE id=?').run(nowIso(), checkinToken, id);
   const qr = await QRCode.toBuffer(checkinToken, { width: 900, margin: 4, errorCorrectionLevel: 'H' });
   await ctx.editMessageText('Участие подтверждено. QR-код для входа придёт следующим сообщением.');
   await sendAssets(row.telegram_id, row.event_id, 'confirmed');
-  await ctx.replyWithPhoto(new InputFile(qr, 'checkin.png'), { caption: `Ваш QR для входа на «${row.title}». Сохраните его.\nРезервный код: ${checkinToken.slice(0, 8).toUpperCase()}` });
+  await sendCheckinQr(ctx, row, checkinToken, qr);
   return;
 });
 
@@ -786,8 +797,8 @@ app.post('/admin/events/:id/settings', adminOnly, (req, res) => {
   res.redirect(`/admin?event=${req.params.id}`);
 });
 app.post('/api/admin/events/:id/texts', adminOnly, (req, res) => {
-  db.prepare('UPDATE events SET description=?, invite_text=?, expired_text=?, confirmed_text=?, reminder_text=?, declined_text=?, rejected_text=? WHERE id=?')
-    .run(richTextHtml(req.body.description || '') || null, richTextHtml(req.body.invite_text || '') || null, richTextHtml(req.body.expired_text || '') || null, richTextHtml(req.body.confirmed_text || '') || null, richTextHtml(req.body.reminder_text || '') || null, richTextHtml(req.body.declined_text || '') || null, richTextHtml(req.body.rejected_text || '') || null, req.params.id);
+  db.prepare('UPDATE events SET description=?, invite_text=?, expired_text=?, confirmed_text=?, reminder_text=?, declined_text=?, rejected_text=?, final_confirmed_text=?, final_declined_text=? WHERE id=?')
+    .run(richTextHtml(req.body.description || '') || null, richTextHtml(req.body.invite_text || '') || null, richTextHtml(req.body.expired_text || '') || null, richTextHtml(req.body.confirmed_text || '') || null, richTextHtml(req.body.reminder_text || '') || null, richTextHtml(req.body.declined_text || '') || null, richTextHtml(req.body.rejected_text || '') || null, richTextHtml(req.body.final_confirmed_text || '') || null, richTextHtml(req.body.final_declined_text || '') || null, req.params.id);
   res.json({ ok: true });
 });
 app.post('/api/admin/events/:id/registration', adminOnly, (req, res) => {
@@ -1080,7 +1091,7 @@ app.post('/api/admin/posts/:id/send', adminOnly, async (req, res) => {
   res.json({ ok: true, sent: sent.length, skipped, sendId: Number(send.lastInsertRowid) });
 });
 app.post('/api/admin/events/:id/message-images/:key', adminOnly, upload.array('images', 9), (req, res) => {
-  const messageKeys = new Set(['registration', 'invite', 'expired', 'confirmed', 'declined', 'rejected', 'reminder']);
+  const messageKeys = new Set(['registration', 'invite', 'expired', 'confirmed', 'declined', 'rejected', 'reminder', 'final_confirmed', 'final_declined']);
   if (!messageKeys.has(req.params.key)) return res.status(400).json({ error: 'Неизвестный тип сообщения' });
   const files = req.files || [];
   if (files.some(file => !file.mimetype.startsWith('image/'))) return res.status(400).json({ error: 'Можно загрузить только изображения' });

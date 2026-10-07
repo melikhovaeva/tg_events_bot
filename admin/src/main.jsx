@@ -430,6 +430,20 @@ function Stat({ label, value, className = "" }) {
 
 const textPosts = [
   {
+    key: "final_confirmed",
+    field: "final_confirmed_text",
+    title: "Финальное подтверждение · QR-код",
+    hint: "Подпись к QR после подтверждения за сутки или при позднем приглашении. Здесь можно указать адрес и инструкции для входа.",
+    placeholder: "Ждём вас на «{event}»! Адрес: … Покажите QR-код организатору.",
+  },
+  {
+    key: "final_declined",
+    field: "final_declined_text",
+    title: "Отказ после напоминания",
+    hint: "Ответ на «Не смогу прийти» в напоминании за сутки до мероприятия.",
+    placeholder: "Спасибо, что предупредили. Ваше участие отменено. До встречи на следующих мероприятиях!",
+  },
+  {
     key: "registration",
     field: "description",
     title: "Регистрация",
@@ -2906,7 +2920,7 @@ function App() {
               Тексты события
             </h1>
             <p className="mt-2 text-muted-foreground">
-              Семь сообщений для пути гостя — каждое с собственным текстом и
+              Сообщения для пути гостя — каждое с собственным текстом и
               изображениями.
             </p>
             <EventTexts
