@@ -18,6 +18,7 @@ import {
   Lock,
   LockOpen,
   Link,
+  Menu,
   Pencil,
   Plus,
   Replace,
@@ -28,6 +29,7 @@ import {
   Trash2,
   Underline,
   Users,
+  X,
 } from "lucide-react";
 import {
   DndContext,
@@ -416,9 +418,9 @@ function ConfirmDialog({ item, onClose }) {
     </Dialog>
   );
 }
-function Stat({ label, value }) {
+function Stat({ label, value, className = "" }) {
   return (
-    <div className="rounded-lg border bg-muted/30 p-3">
+    <div className={`rounded-lg border bg-muted/30 p-3 ${className}`}>
       <div className="text-xl font-semibold tracking-tight">{value}</div>
       <div className="text-xs text-muted-foreground">{label}</div>
     </div>
@@ -1074,7 +1076,7 @@ function Checkin({ event, onBack, onCheckedIn }) {
         video: { facingMode: { ideal: "environment" } },
         audio: false,
       });
-      if (!video.current) return;
+      if (!video.current) throw new Error("Видео камеры не подготовлено");
       video.current.srcObject = stream.current;
       await video.current.play();
       setScanning(true);
@@ -1152,17 +1154,15 @@ function Checkin({ event, onBack, onCheckedIn }) {
                 </>
               )}
             </Button>
-            {scanning && (
-              <div className="overflow-hidden rounded-md bg-black">
-                <video
-                  ref={video}
-                  playsInline
-                  muted
-                  className="aspect-square w-full object-cover"
-                />
-                <canvas ref={canvas} className="hidden" />
-              </div>
-            )}
+            <div className={scanning ? "overflow-hidden rounded-md bg-black" : "hidden"}>
+              <video
+                ref={video}
+                playsInline
+                muted
+                className="aspect-square w-full object-cover"
+              />
+              <canvas ref={canvas} className="hidden" />
+            </div>
             <form
               onSubmit={(event) => {
                 event.preventDefault();
@@ -1991,6 +1991,7 @@ function App() {
   const [activePost, setActivePost] = useState(initialPost);
   const [activeBroadcast, setActiveBroadcast] = useState(initialBroadcast);
   const [activeDialog, setActiveDialog] = useState(initialDialog);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [dialog, setDialog] = useState(null);
   const [dialogMessages, setDialogMessages] = useState([]);
   const [open, setOpen] = useState(false);
@@ -2283,7 +2284,7 @@ function App() {
       <header className="border-b">
         <div className="mx-auto flex h-14 max-w-7xl items-center justify-between px-5">
           <b>Event Ops</b>
-          <nav className="flex items-center gap-1">
+          <nav className="hidden items-center gap-1 md:flex">
             {nav.map((item) => {
               const Icon = item.icon;
               return (
@@ -2301,16 +2302,38 @@ function App() {
               );
             })}
           </nav>
-          <form action="/logout" method="post">
+          <div className="flex items-center gap-1">
             <button
-              title="Выйти из админки"
-              aria-label="Выйти из админки"
-              className="flex h-9 w-10 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+              type="button"
+              title="Меню"
+              aria-label={mobileMenuOpen ? "Закрыть меню" : "Открыть меню"}
+              aria-expanded={mobileMenuOpen}
+              onClick={() => setMobileMenuOpen((open) => !open)}
+              className="flex h-9 w-9 items-center justify-center rounded-md hover:bg-accent md:hidden"
             >
-              <LogOut size={16} />
+              {mobileMenuOpen ? <X size={18} /> : <Menu size={18} />}
             </button>
-          </form>
+            <form action="/logout" method="post">
+              <button
+                title="Выйти из админки"
+                aria-label="Выйти из админки"
+                className="flex h-9 w-10 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+              >
+                <LogOut size={16} />
+              </button>
+            </form>
+          </div>
         </div>
+        {mobileMenuOpen && (
+          <nav className="border-t bg-background p-3 md:hidden" aria-label="Основная навигация">
+            <div className="mx-auto grid max-w-7xl grid-cols-2 gap-1">
+              {nav.map((item) => {
+                const Icon = item.icon;
+                return <button key={item.id} onClick={() => { setPage(item.id); setMobileMenuOpen(false); if (item.id === "dialogs") load(active); }} className={`flex min-h-11 items-center gap-2 rounded-md px-3 text-left text-sm ${page === item.id ? "bg-accent font-medium" : "hover:bg-accent"}`}><Icon size={16} />{item.label}</button>;
+              })}
+            </div>
+          </nav>
+        )}
       </header>
       <main className="mx-auto max-w-7xl min-w-0 p-6 lg:p-10">
         {error && (
@@ -2455,17 +2478,19 @@ function App() {
                 </Button>
               </div>
             </div>
-            <div className="mt-7 grid gap-4 md:grid-cols-4">
+            <div className="event-metrics mt-7 flex gap-3 overflow-x-auto pb-2 md:grid md:grid-cols-4 md:overflow-visible">
               <Stat
                 label="зарегистрировалось"
                 value={count(event.registered)}
+                className="min-w-36 shrink-0"
               />
-              <Stat label="приглашений" value={count(event.invited)} />
+              <Stat label="приглашений" value={count(event.invited)} className="min-w-36 shrink-0" />
               <Stat
                 label="подтвердило участие"
                 value={count(event.confirmed)}
+                className="min-w-36 shrink-0"
               />
-              <Stat label="пришли" value={count(event.checked_in)} />
+              <Stat label="пришли" value={count(event.checked_in)} className="min-w-36 shrink-0" />
             </div>
             {!event.registration_open && (
               <p className="mt-4 rounded-md border bg-muted/40 px-3 py-2 text-sm">
