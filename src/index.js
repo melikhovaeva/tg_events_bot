@@ -908,8 +908,11 @@ app.delete('/api/admin/events/:id', adminOnly, (req, res) => {
     db.prepare('DELETE FROM event_message_images WHERE event_id=?').run(event.id);
     db.prepare('DELETE FROM event_assets WHERE event_id=?').run(event.id);
     db.prepare('UPDATE posts SET event_id=NULL WHERE event_id=?').run(event.id);
+    // Keep staff accounts, but detach assistants from the deleted event.
+    db.prepare('UPDATE admin_users SET event_id=NULL WHERE event_id=?').run(event.id);
     db.prepare('DELETE FROM events WHERE id=?').run(event.id);
   })();
+  setAudit(req, 'Удалил мероприятие', event.title);
   storedNames.forEach(name => fs.unlink(path.join(uploadsDir, name), () => {}));
   res.json({ ok: true });
 });
