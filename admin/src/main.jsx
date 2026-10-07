@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import jsQR from "jsqr";
 import {
   CalendarDays,
+  ArrowDown,
   Ban,
   Bold,
   Check,
@@ -1696,6 +1697,22 @@ function Dialogs({
   onOpen,
   onSend,
 }) {
+  const [search, setSearch] = useState("");
+  const messagesRef = useRef(null);
+  const filteredConversations = conversations.filter((item) =>
+    `${item.telegram_name || ""} ${item.person_name || ""} ${item.telegram_id}`.toLowerCase().includes(search.trim().replace(/^@/, "").toLowerCase()),
+  );
+  const scrollToBottom = (behavior = "smooth") => {
+    const container = messagesRef.current;
+    if (container) container.scrollTo({ top: container.scrollHeight, behavior });
+  };
+  useEffect(() => {
+    scrollToBottom("instant");
+  }, [activeId]);
+  useEffect(() => {
+    const container = messagesRef.current;
+    if (container && container.scrollHeight - container.scrollTop - container.clientHeight < 150) scrollToBottom("instant");
+  }, [messages]);
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
@@ -1728,10 +1745,11 @@ function Dialogs({
           <aside className="flex min-h-0 flex-col overflow-hidden border-b md:border-b-0 md:border-r">
             <div className="shrink-0 border-b px-4 py-3 text-sm font-medium">
               Все пользователи бота
+              <Input className="mt-2" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Поиск по @нику или имени" aria-label="Поиск диалогов" />
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-2">
-              {conversations.length ? (
-                conversations.map((item) => (
+              {filteredConversations.length ? (
+                filteredConversations.map((item) => (
                   <button
                     key={item.telegram_id}
                     onClick={() => onOpen(item.telegram_id)}
@@ -1761,7 +1779,7 @@ function Dialogs({
                 ))
               ) : (
                 <p className="p-3 text-sm text-muted-foreground">
-                  Пока никто не запустил бота.
+                  {search ? "Пользователи не найдены." : "Пока никто не запустил бота."}
                 </p>
               )}
             </div>
@@ -1784,7 +1802,8 @@ function Dialogs({
                     Ответ будет отправлен в личный чат с ботом.
                   </p>
                 </div>
-                <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain bg-muted/20 p-4 sm:p-5 [&>div]:shrink-0">
+                <div className="relative min-h-0 flex-1">
+                <div ref={messagesRef} className="flex h-full min-h-0 flex-col gap-3 overflow-y-auto overscroll-contain bg-muted/20 p-4 pb-16 sm:p-5 sm:pb-16 [&>div]:shrink-0">
                   {messages.map((message) => (
                     <div
                       key={message.id}
@@ -1800,6 +1819,10 @@ function Dialogs({
                       </p>
                     </div>
                   ))}
+                </div>
+                <Button type="button" variant="outline" size="sm" className="absolute bottom-3 right-4 h-10 w-10 rounded-full bg-background p-0 shadow-md" onClick={() => scrollToBottom()} title="К последнему сообщению" aria-label="Прокрутить к последнему сообщению">
+                  <ArrowDown size={18} />
+                </Button>
                 </div>
                 <div className="shrink-0 border-t p-3 sm:p-4">
                   <div className="flex gap-2">
