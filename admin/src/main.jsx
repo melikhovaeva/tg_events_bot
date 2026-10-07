@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
+import jsQR from "jsqr";
 import {
   CalendarDays,
   Ban,
@@ -475,25 +476,67 @@ function EventEditor({ event, eventImages, onSaved, onBack }) {
 
 function Checkin({ event, onBack, onCheckedIn }) {
   const input = useRef(null);
+  const video = useRef(null);
+  const canvas = useRef(null);
+  const stream = useRef(null);
+  const frame = useRef(null);
+  const processing = useRef(false);
   const [code, setCode] = useState("");
   const [result, setResult] = useState(null);
   const [error, setError] = useState("");
-  const submit = async (e) => {
-    e.preventDefault();
+  const [scanning, setScanning] = useState(false);
+  const stopCamera = () => {
+    if (frame.current) cancelAnimationFrame(frame.current);
+    frame.current = null;
+    stream.current?.getTracks().forEach((track) => track.stop());
+    stream.current = null;
+    setScanning(false);
+  };
+  const submitCode = async (value) => {
+    const cleanCode = String(value || "").trim();
+    if (!cleanCode) return;
     setError(""); setResult(null);
     try {
-      const response = await fetch("/api/admin/checkin", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code, event_id: event.id }) });
+      const response = await fetch("/api/admin/checkin", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code: cleanCode, event_id: event.id }) });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Не удалось отметить гостя");
       setResult(data); setCode(""); await onCheckedIn();
     } catch (e) { setError(e.message); }
     finally { window.setTimeout(() => input.current?.focus(), 0); }
   };
-  useEffect(() => { input.current?.focus(); }, []);
+  const startCamera = async () => {
+    setError(""); setResult(null);
+    if (!navigator.mediaDevices?.getUserMedia) { setError("Камера не поддерживается в этом браузере. Используйте поле для кода."); return; }
+    try {
+      stream.current = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" } }, audio: false });
+      if (!video.current) return;
+      video.current.srcObject = stream.current;
+      await video.current.play();
+      setScanning(true);
+      const scan = () => {
+        const player = video.current;
+        const surface = canvas.current;
+        if (!player || !surface || !stream.current) return;
+        if (player.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+          surface.width = player.videoWidth; surface.height = player.videoHeight;
+          const context = surface.getContext("2d", { willReadFrequently: true });
+          const found = context && jsQR(context.getImageData(0, 0, surface.width, surface.height).data, surface.width, surface.height, { inversionAttempts: "dontInvert" });
+          if (found && !processing.current) {
+            processing.current = true; stopCamera(); setCode(found.data);
+            void submitCode(found.data).finally(() => { processing.current = false; });
+            return;
+          }
+        }
+        frame.current = requestAnimationFrame(scan);
+      };
+      frame.current = requestAnimationFrame(scan);
+    } catch (e) { stopCamera(); setError("Не удалось открыть камеру. Разрешите доступ к камере или введите код вручную."); }
+  };
+  useEffect(() => { input.current?.focus(); return () => stopCamera(); }, []);
   return <>
     <button onClick={onBack} className="mb-5 text-sm text-muted-foreground hover:text-foreground">← {event.title}</button>
-    <div><h1 className="text-3xl font-semibold tracking-tight">Чек-ин</h1><p className="mt-2 text-muted-foreground">Сканируйте QR камерой или подключённым сканером. Код автоматически подставится в поле.</p></div>
-    <Card className="mt-7 max-w-xl"><CardContent className="p-5 sm:p-6"><form onSubmit={submit} className="grid gap-4"><label className="grid gap-2 text-sm font-medium">Код гостя<Input ref={input} value={code} onChange={(e) => setCode(e.target.value)} placeholder="Сканируйте QR или вставьте код" autoComplete="off" /></label><Button disabled={!code.trim()}><QrCode size={16} />Отметить приход</Button></form>{result && <div className="mt-5 rounded-md border border-green-200 bg-green-50 p-4 text-sm text-green-800"><b>{result.guest}</b> отмечен на мероприятии.</div>}{error && <div className="mt-5 rounded-md border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">{error}</div>}</CardContent></Card>
+    <div><h1 className="text-3xl font-semibold tracking-tight">Чек-ин</h1><p className="mt-2 text-muted-foreground">Откройте страницу с телефона, включите камеру и наведите её на QR гостя. Подключённый сканер и ручной ввод тоже работают.</p></div>
+    <Card className="mt-7 max-w-xl"><CardContent className="p-5 sm:p-6"><div className="grid gap-4"><Button type="button" variant={scanning ? "outline" : "default"} onClick={scanning ? stopCamera : startCamera}>{scanning ? "Остановить камеру" : <><QrCode size={16} />Сканировать QR камерой</>}</Button>{scanning && <div className="overflow-hidden rounded-md bg-black"><video ref={video} playsInline muted className="aspect-square w-full object-cover" /><canvas ref={canvas} className="hidden" /></div>}<form onSubmit={(event) => { event.preventDefault(); submitCode(code); }} className="grid gap-4"><label className="grid gap-2 text-sm font-medium">Код гостя<Input ref={input} value={code} onChange={(e) => setCode(e.target.value)} placeholder="Сканируйте QR или вставьте код" autoComplete="off" /></label><Button disabled={!code.trim()}><QrCode size={16} />Отметить приход</Button></form></div>{result && <div className="mt-5 rounded-md border border-green-200 bg-green-50 p-4 text-sm text-green-800"><b>{result.guest}</b> отмечен на мероприятии.</div>}{error && <div className="mt-5 rounded-md border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">{error}</div>}</CardContent></Card>
   </>;
 }
 
