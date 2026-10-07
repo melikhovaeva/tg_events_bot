@@ -13,6 +13,7 @@ import { loginPage } from './lib/login-page.js';
 import { backupsDir, dbPath, ensureDataDirectories, uploadsDir } from './lib/paths.js';
 import { defaultText, esc, eventText, messageOptions, nowIso, richTextHtml, telegramHtml, token } from './lib/text.js';
 import { createInvitationService } from './services/invitations.js';
+import { parseEventTime } from './lib/event-time.js';
 
 validateConfig();
 
@@ -379,7 +380,7 @@ async function continueStart(ctx, claim) {
   if (eventMatch) {
     const event = db.prepare('SELECT * FROM events WHERE id=?').get(eventMatch[1]);
     if (!event) return ctx.reply('Это мероприятие не найдено или уже недоступно.');
-    const date = new Date(event.starts_at).toLocaleString('ru-RU', { dateStyle: 'long', timeStyle: 'short' });
+    const date = new Date(event.starts_at).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', dateStyle: 'long', timeStyle: 'short' });
     const details = [event.registration_text || event.description, event.venue && `📍 ${event.venue}`, `🗓 ${date}`, event.registration_open ? 'Регистрация открыта' : 'Регистрация закрыта'].filter(Boolean).join('\n\n');
     const existing = db.prepare('SELECT status FROM applicants WHERE event_id=? AND telegram_id=?').get(event.id, String(ctx.from.id));
     if (existing && existing.status !== 'cancelled') return ctx.reply(`Вы уже подали заявку на «${event.title}». Сейчас: ${userStatus[existing.status] || existing.status}.`, { reply_markup: mainKeyboard() });
@@ -561,7 +562,7 @@ async function showMyApplications(ctx) {
   if (!applications.length) return ctx.reply('У вас пока нет регистраций. Откройте «Мероприятия», чтобы выбрать событие.', { reply_markup: mainKeyboard() });
   for (const application of applications) {
     const status = application.invitation_status || application.status;
-    const date = new Date(application.starts_at).toLocaleString('ru-RU', { dateStyle: 'medium', timeStyle: 'short' });
+    const date = new Date(application.starts_at).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', dateStyle: 'medium', timeStyle: 'short' });
     const completedStatuses = new Set(['cancelled', 'declined', 'rejected', 'expired', 'final_expired']);
     const keyboard = completedStatuses.has(status) || completedStatuses.has(application.status)
       ? undefined
@@ -779,11 +780,13 @@ app.get('/admin/legacy', adminOnly, (req, res) => {
 });
 app.use('/admin', adminOnly, express.static(adminBuild));
 app.post('/admin/events', adminOnly, upload.array('images', 9), (req, res) => {
+  const startsAt = parseEventTime(req.body);
+  if (Number.isNaN(startsAt.getTime())) return res.status(400).json({ error: 'Укажите корректные дату и время мероприятия' });
   const images = req.files || [];
   if (images.some(file => !file.mimetype.startsWith('image/'))) return res.status(400).send('Карточка может содержать только изображения');
   const createEvent = db.transaction(() => {
     const result = db.prepare('INSERT INTO events (title,starts_at,description,venue,chat_url) VALUES (?,?,?,?,?)')
-      .run(req.body.title, new Date(req.body.starts_at).toISOString(), req.body.description || null, req.body.venue || null, req.body.chat_url || null);
+      .run(req.body.title, startsAt.toISOString(), req.body.description || null, req.body.venue || null, req.body.chat_url || null);
     const eventId = result.lastInsertRowid;
     const insertImage = db.prepare('INSERT INTO event_images (event_id,original_name,stored_name,position) VALUES (?,?,?,?)');
     images.forEach((file, position) => insertImage.run(eventId, file.originalname, file.filename, position));
@@ -813,7 +816,7 @@ app.post('/api/admin/events/:id/registration', adminOnly, (req, res) => {
     WHERE NOT EXISTS(SELECT 1 FROM blocked_users b WHERE b.telegram_id=conversations.telegram_id)`).all() : [];
   res.json({ ok: true, notificationQueued: notify, recipients: recipients.length });
   if (!notify || !recipients.length) return;
-  const date = new Date(event.starts_at).toLocaleString('ru-RU', { dateStyle: 'long', timeStyle: 'short' });
+  const date = new Date(event.starts_at).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', dateStyle: 'long', timeStyle: 'short' });
   const text = `Открыта регистрация на «${event.title}»\n🗓 ${date}`;
   const keyboard = new InlineKeyboard().text('Открыть мероприятие', `event:${event.id}`);
   // Do not hold the admin interface while Telegram delivers a notification to
@@ -932,7 +935,7 @@ app.post('/api/admin/dialogs/:telegramId/reply', adminOnly, async (req, res) => 
 });
 app.post('/api/admin/events/:id', adminOnly, (req, res) => {
   const title = String(req.body.title || '').trim();
-  const startsAt = new Date(req.body.starts_at);
+  const startsAt = parseEventTime(req.body);
   if (!title || Number.isNaN(startsAt.getTime())) return res.status(400).json({ error: 'Укажите название и дату мероприятия' });
   const result = db.prepare('UPDATE events SET title=?, starts_at=?, description=?, venue=?, chat_url=? WHERE id=?')
     .run(title, startsAt.toISOString(), richTextHtml(req.body.description || '') || null, String(req.body.venue || '').trim() || null, String(req.body.chat_url || '').trim() || null, req.params.id);

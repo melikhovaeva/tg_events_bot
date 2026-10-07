@@ -78,6 +78,7 @@ const statusNames = {
 };
 const fmt = (value) =>
   new Date(value).toLocaleString("ru-RU", {
+    timeZone: "Europe/Moscow",
     dateStyle: "medium",
     timeStyle: "short",
   });
@@ -341,10 +342,10 @@ function CreateDialog({ open, setOpen, create }) {
             Название
             <Input name="title" required />
           </label>
-          <label className="grid gap-1.5 text-sm font-medium">
-            Дата и время
-            <Input name="starts_at" type="datetime-local" required />
-          </label>
+          <div className="grid grid-cols-2 gap-3">
+            <label className="grid gap-1.5 text-sm font-medium">Дата<Input name="event_date" type="date" required /></label>
+            <label className="grid gap-1.5 text-sm font-medium">Время · МСК<Input name="event_time" type="time" required /></label>
+          </div>
           <label className="grid gap-1.5 text-sm font-medium">
             Место
             <Input name="venue" />
@@ -930,9 +931,8 @@ function TextPostEditor({ event, post, messageImages, onSaved, onBack }) {
 }
 
 const localDateTime = (value) => {
-  const date = new Date(value);
-  const pad = (number) => String(number).padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/Moscow", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(new Date(value)).map(({ type, value }) => [type, value]));
+  return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`;
 };
 function EventEditor({ event, eventImages, onSaved, onBack }) {
   const [title, setTitle] = useState(event.title);
@@ -1038,12 +1038,15 @@ function EventEditor({ event, eventImages, onSaved, onBack }) {
           </label>
           <div className="grid gap-5 sm:grid-cols-2">
             <label className="grid gap-1.5 text-sm font-medium">
-              Дата и время
+              Дата
               <Input
-                type="datetime-local"
-                value={startsAt}
-                onChange={(e) => setStartsAt(e.target.value)}
+                type="date"
+                value={startsAt.split("T")[0]}
+                onChange={(e) => setStartsAt(`${e.target.value}T${startsAt.split("T")[1]}`)}
               />
+            </label>
+            <label className="grid gap-1.5 text-sm font-medium">Время · МСК
+              <Input type="time" value={startsAt.split("T")[1]} onChange={(e) => setStartsAt(`${startsAt.split("T")[0]}T${e.target.value}`)} />
             </label>
             <label className="grid gap-1.5 text-sm font-medium">
               Место
