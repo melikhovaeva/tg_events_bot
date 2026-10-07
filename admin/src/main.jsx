@@ -2255,6 +2255,8 @@ function App() {
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [selectedApplicants, setSelectedApplicants] = useState([]);
+  const [applicantSearch, setApplicantSearch] = useState("");
+  useEffect(() => { setApplicantSearch(""); setSelectedApplicants([]); }, [active]);
   const [invitingIds, setInvitingIds] = useState([]);
   const [bulkNotice, setBulkNotice] = useState("");
   const [notice, setNotice] = useState("");
@@ -2386,7 +2388,10 @@ function App() {
       setInvitingIds((current) => current.filter((item) => item !== id));
     }
   };
-  const eligibleApplicants = state.people.filter(
+  const filteredApplicants = state.people.filter((person) =>
+    `${person.name || ""} ${person.telegram_name || ""}`.toLowerCase().includes(applicantSearch.trim().replace(/^@/, "").toLowerCase()),
+  );
+  const eligibleApplicants = filteredApplicants.filter(
     (person) =>
       person.telegram_id &&
       !person.blocked &&
@@ -2811,7 +2816,15 @@ function App() {
                 </p>
               )}
               <CardContent className="overflow-x-auto">
-                <GuestCards people={state.people} onInvite={invite} invitingIds={invitingIds} onReject={rejectApplicant} onBlock={toggleBlock} onRemove={removeApplicant} />
+                <Input
+                  value={applicantSearch}
+                  onChange={(e) => { setApplicantSearch(e.target.value); setSelectedApplicants([]); }}
+                  placeholder="Поиск по ФИО или @нику"
+                  aria-label="Поиск заявок по ФИО или Telegram-нику"
+                  className="mb-3 max-w-md"
+                />
+                {applicantSearch && <p className="mb-3 text-sm text-muted-foreground">Найдено: {filteredApplicants.length} из {state.people.length}</p>}
+                <GuestCards people={filteredApplicants} hideSearch onInvite={invite} invitingIds={invitingIds} onReject={rejectApplicant} onBlock={toggleBlock} onRemove={removeApplicant} />
                 <div className="hidden overflow-x-auto md:block"><table className="w-full min-w-[620px] text-sm">
                   <thead>
                     <tr className="border-b text-left text-muted-foreground">
@@ -2837,7 +2850,7 @@ function App() {
                     </tr>
                   </thead>
                   <tbody>
-                    {state.people.map((p) => (
+                    {filteredApplicants.map((p) => (
                       <tr key={p.id} className="border-b last:border-0">
                         <td className="py-3">
                           <input
@@ -2965,7 +2978,7 @@ function App() {
                       </tr>
                     ))}
                   </tbody>
-                </table></div>
+                </table>{!filteredApplicants.length && <p className="py-5 text-sm text-muted-foreground">{applicantSearch ? "По этому запросу никто не найден." : "Заявок пока нет."}</p>}</div>
               </CardContent>
             </Card>
           </>
