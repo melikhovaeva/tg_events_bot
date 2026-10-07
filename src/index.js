@@ -713,8 +713,28 @@ app.post('/api/admin/events/:id/texts', adminOnly, (req, res) => {
   res.json({ ok: true });
 });
 app.post('/api/admin/events/:id/registration', adminOnly, (req, res) => {
-  db.prepare('UPDATE events SET registration_open=? WHERE id=?').run(req.body.open ? 1 : 0, req.params.id);
-  res.json({ ok: true });
+  const event = db.prepare('SELECT * FROM events WHERE id=?').get(req.params.id);
+  if (!event) return res.sendStatus(404);
+  const open = Boolean(req.body.open);
+  const notify = open && !event.registration_open;
+  db.prepare('UPDATE events SET registration_open=? WHERE id=?').run(open ? 1 : 0, event.id);
+  ensureConversationsForBotUsers();
+  const recipients = notify ? db.prepare(`SELECT telegram_id FROM conversations
+    WHERE NOT EXISTS(SELECT 1 FROM blocked_users b WHERE b.telegram_id=conversations.telegram_id)`).all() : [];
+  res.json({ ok: true, notificationQueued: notify, recipients: recipients.length });
+  if (!notify || !recipients.length) return;
+  const date = new Date(event.starts_at).toLocaleString('ru-RU', { dateStyle: 'long', timeStyle: 'short' });
+  const text = `Открыта регистрация на «${event.title}»\n🗓 ${date}`;
+  const keyboard = new InlineKeyboard().text('Открыть мероприятие', `event:${event.id}`);
+  // Do not hold the admin interface while Telegram delivers a notification to
+  // every subscriber. Individual failures are expected (for example, a user
+  // may have blocked the bot) and must not prevent registration from opening.
+  void (async () => {
+    for (const { telegram_id: telegramId } of recipients) {
+      await bot.api.sendMessage(telegramId, text, messageOptions({ reply_markup: keyboard })).catch(console.error);
+      await new Promise((resolve) => setTimeout(resolve, 60));
+    }
+  })();
 });
 app.delete('/api/admin/applicants/:id', adminOnly, (req, res) => {
   const applicant = db.prepare('SELECT id FROM applicants WHERE id=?').get(req.params.id);

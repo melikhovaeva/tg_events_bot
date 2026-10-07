@@ -822,7 +822,9 @@ function App() {
     } catch (e) { setError(e.message); }
   };
   const setRegistration = async (open) => {
-    await request(`/api/admin/events/${event.id}/registration`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ open }) });
+    const result = await (await request(`/api/admin/events/${event.id}/registration`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ open }) })).json();
+    setNotice(open ? (result.notificationQueued ? `Регистрация открыта. Уведомление поставлено в очередь для ${result.recipients} пользователей.` : "Регистрация открыта.") : "Регистрация закрыта.");
+    window.setTimeout(() => setNotice(""), 5000);
     await load(event.id);
   };
   const removeApplicant = (person) => setConfirm({
