@@ -141,6 +141,7 @@ for (const [table, column, definition] of [
   ['profile_drafts', 'phone', 'TEXT'],
   ['admin_sessions', 'user_id', 'INTEGER REFERENCES admin_users(id)'],
   ['admin_users', 'is_active', 'INTEGER NOT NULL DEFAULT 1'],
+  ['admin_users', 'event_id', 'INTEGER REFERENCES events(id)'],
 ]) {
   try { db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`); } catch { /* already exists */ }
 }
@@ -227,7 +228,7 @@ function readCookie(req, name) {
 function currentAdmin(req) {
   const id = readCookie(req, 'event_ops_session');
   if (!id) return null;
-  const session = db.prepare(`SELECT s.id AS session_id, s.expires_at, u.id, u.username, u.display_name, u.role
+  const session = db.prepare(`SELECT s.id AS session_id, s.expires_at, u.id, u.username, u.display_name, u.role, u.event_id
     FROM admin_sessions s JOIN admin_users u ON u.id=s.user_id WHERE s.id=? AND u.is_active=1`).get(id);
   if (!session || session.expires_at <= Date.now()) {
     db.prepare('DELETE FROM admin_sessions WHERE id=?').run(id);
@@ -242,6 +243,9 @@ const adminOnly = (req, res, next) => {
   const user = currentAdmin(req);
   if (user) {
     req.adminUser = user;
+    if (user.role === 'assistant' && req.path.startsWith('/api/admin/') && !['/api/admin/state', '/api/admin/checkin', '/api/admin/account/password'].includes(req.path)) {
+      return res.status(403).json({ error: 'Помощнику доступны только список гостей и чек-ин назначенного мероприятия' });
+    }
     const sessionId = readCookie(req, 'event_ops_session');
     db.prepare('UPDATE admin_sessions SET expires_at=? WHERE id=?').run(Date.now() + sessionDurationMs, sessionId);
     res.set('Set-Cookie', sessionCookie(sessionId));
@@ -622,34 +626,35 @@ app.post('/logout', (req, res) => {
 app.get('/', (_, res) => res.redirect('/admin'));
 app.get('/api/admin/state', adminOnly, (req, res) => {
   ensureConversationsForBotUsers();
-  const events = db.prepare(`SELECT e.*, COUNT(DISTINCT a.id) AS registered, COUNT(DISTINCT i.id) AS invited,
+  const allEvents = db.prepare(`SELECT e.*, COUNT(DISTINCT a.id) AS registered, COUNT(DISTINCT i.id) AS invited,
     SUM(CASE WHEN i.status='confirmed' THEN 1 ELSE 0 END) AS confirmed,
     SUM(CASE WHEN i.checked_in_at IS NOT NULL THEN 1 ELSE 0 END) AS checked_in
     FROM events e LEFT JOIN applicants a ON a.event_id=e.id LEFT JOIN invitations i ON i.applicant_id=a.id
     GROUP BY e.id ORDER BY e.starts_at DESC`).all();
-  const selected = Number(req.query.event || events[0]?.id);
+  const events = req.adminUser.role === 'assistant' ? allEvents.filter((event) => event.id === req.adminUser.event_id) : allEvents;
+  const selected = req.adminUser.role === 'assistant' ? req.adminUser.event_id : Number(req.query.event || events[0]?.id);
   const people = selected ? db.prepare(`SELECT a.*, i.id invitation_id, i.status invitation_status, i.expires_at, i.final_expires_at, i.final_confirmed_at, i.reminder_sent_at, i.checked_in_at,
     EXISTS(SELECT 1 FROM blocked_users b WHERE b.telegram_id=a.telegram_id) AS blocked,
     (SELECT ia.status FROM invitation_attempts ia WHERE ia.applicant_id=a.id AND ia.status!='pending' ORDER BY ia.id DESC LIMIT 1) AS previous_invitation_status
     FROM applicants a LEFT JOIN invitations i ON i.applicant_id=a.id WHERE a.event_id=? ORDER BY a.created_at DESC`).all(selected) : [];
-  const assets = selected ? db.prepare('SELECT * FROM event_assets WHERE event_id=? ORDER BY created_at DESC').all(selected) : [];
-  const guests = db.prepare(`SELECT a.telegram_id, a.telegram_name, a.name, a.phone, MAX(a.created_at) AS last_seen,
+  const assets = selected && req.adminUser.role !== 'assistant' ? db.prepare('SELECT * FROM event_assets WHERE event_id=? ORDER BY created_at DESC').all(selected) : [];
+  const guests = req.adminUser.role === 'assistant' ? [] : db.prepare(`SELECT a.telegram_id, a.telegram_name, a.name, a.phone, MAX(a.created_at) AS last_seen,
     MAX(a.was_school_student) AS was_school_student, COUNT(a.id) AS events_count
     FROM applicants a GROUP BY COALESCE(a.telegram_id, 'applicant:' || a.id) ORDER BY last_seen DESC`).all();
-  const messageImages = selected ? db.prepare('SELECT id,message_key,original_name,position FROM event_message_images WHERE event_id=? ORDER BY position').all(selected) : [];
-  const eventImages = selected ? db.prepare('SELECT id,event_id,original_name,position FROM event_images WHERE event_id=? ORDER BY position').all(selected) : [];
-  const posts = db.prepare(`SELECT p.*, e.title AS event_title FROM posts p LEFT JOIN events e ON e.id=p.event_id ORDER BY p.updated_at DESC`).all();
-  const postImages = db.prepare('SELECT id,post_id,original_name,position FROM post_images ORDER BY position').all();
-  const postFiles = db.prepare('SELECT id,post_id,original_name FROM post_files ORDER BY created_at').all();
-  const conversations = db.prepare(`SELECT c.*, COALESCE(p.name, a.name) AS person_name
+  const messageImages = selected && req.adminUser.role !== 'assistant' ? db.prepare('SELECT id,message_key,original_name,position FROM event_message_images WHERE event_id=? ORDER BY position').all(selected) : [];
+  const eventImages = selected && req.adminUser.role !== 'assistant' ? db.prepare('SELECT id,event_id,original_name,position FROM event_images WHERE event_id=? ORDER BY position').all(selected) : [];
+  const posts = req.adminUser.role === 'assistant' ? [] : db.prepare(`SELECT p.*, e.title AS event_title FROM posts p LEFT JOIN events e ON e.id=p.event_id ORDER BY p.updated_at DESC`).all();
+  const postImages = req.adminUser.role === 'assistant' ? [] : db.prepare('SELECT id,post_id,original_name,position FROM post_images ORDER BY position').all();
+  const postFiles = req.adminUser.role === 'assistant' ? [] : db.prepare('SELECT id,post_id,original_name FROM post_files ORDER BY created_at').all();
+  const conversations = req.adminUser.role === 'assistant' ? [] : db.prepare(`SELECT c.*, COALESCE(p.name, a.name) AS person_name
     FROM conversations c
     LEFT JOIN telegram_profiles p ON p.telegram_id=c.telegram_id
     LEFT JOIN (SELECT telegram_id, MAX(name) AS name FROM applicants WHERE telegram_id IS NOT NULL GROUP BY telegram_id) a ON a.telegram_id=c.telegram_id
     ORDER BY c.last_message_at DESC`).all();
-  const postRecipients = db.prepare('SELECT post_id,telegram_id FROM post_recipients').all();
-  const postSendSummaries = db.prepare(`SELECT s.* FROM post_sends s
+  const postRecipients = req.adminUser.role === 'assistant' ? [] : db.prepare('SELECT post_id,telegram_id FROM post_recipients').all();
+  const postSendSummaries = req.adminUser.role === 'assistant' ? [] : db.prepare(`SELECT s.* FROM post_sends s
     JOIN (SELECT post_id, MAX(id) AS id FROM post_sends GROUP BY post_id) latest ON latest.id=s.id`).all();
-  const adminUsers = req.adminUser.role === 'admin' ? db.prepare('SELECT id,username,display_name,role,is_active,created_at,last_login_at FROM admin_users ORDER BY role, display_name').all() : [];
+  const adminUsers = req.adminUser.role === 'admin' ? db.prepare('SELECT u.id,u.username,u.display_name,u.role,u.is_active,u.event_id,u.created_at,u.last_login_at,e.title AS event_title FROM admin_users u LEFT JOIN events e ON e.id=u.event_id ORDER BY u.role, u.display_name').all() : [];
   const auditLog = req.adminUser.role === 'admin' ? db.prepare('SELECT * FROM admin_audit_log ORDER BY id DESC LIMIT 60').all() : [];
   res.json({ events, selected, people, assets, guests, messageImages, eventImages, posts, postImages, postFiles, postRecipients, postSendSummaries, conversations, adminUsers, auditLog, currentUser: req.adminUser, botUsername: process.env.BOT_USERNAME });
 });
@@ -669,12 +674,14 @@ app.post('/api/admin/users', primaryAdminOnly, (req, res) => {
   const username = String(req.body.username || '').trim().toLowerCase();
   const displayName = String(req.body.display_name || '').trim();
   const password = String(req.body.password || '');
-  const role = req.body.role === 'admin' ? 'admin' : 'director';
+  const role = ['admin', 'director', 'assistant'].includes(req.body.role) ? req.body.role : 'director';
+  const eventId = role === 'assistant' ? Number(req.body.event_id) : null;
   if (!/^[a-z0-9._-]{3,32}$/.test(username)) return res.status(400).json({ error: 'Логин: от 3 до 32 символов, латиница, цифры, точка, дефис или нижнее подчёркивание' });
   if (!displayName) return res.status(400).json({ error: 'Укажите имя пользователя' });
   if (password.length < 10) return res.status(400).json({ error: 'Временный пароль должен содержать не меньше 10 символов' });
+  if (role === 'assistant' && !db.prepare('SELECT 1 FROM events WHERE id=?').get(eventId)) return res.status(400).json({ error: 'Выберите мероприятие для помощника' });
   try {
-    const result = db.prepare('INSERT INTO admin_users (username,display_name,role,password_hash) VALUES (?,?,?,?)').run(username, displayName, role, passwordHash(password));
+    const result = db.prepare('INSERT INTO admin_users (username,display_name,role,password_hash,event_id) VALUES (?,?,?,?,?)').run(username, displayName, role, passwordHash(password), eventId);
     res.json({ ok: true, id: Number(result.lastInsertRowid) });
   } catch (error) {
     if (String(error.message).includes('UNIQUE')) return res.status(400).json({ error: 'Этот логин уже занят' });
@@ -694,6 +701,7 @@ app.post('/api/admin/users/:id/status', primaryAdminOnly, (req, res) => {
   res.json({ ok: true });
 });
 app.get('/admin/legacy', adminOnly, (req, res) => {
+  if (req.adminUser.role === 'assistant') return res.status(403).send('Доступ ограничен назначенным мероприятием.');
   const events = db.prepare('SELECT * FROM events ORDER BY starts_at DESC').all();
   const selected = Number(req.query.event || events[0]?.id);
   const current = events.find(event => event.id === selected);
@@ -1029,6 +1037,7 @@ app.post('/api/admin/events/:id/message-images/:key/order', adminOnly, (req, res
 app.post('/api/admin/checkin', adminOnly, (req, res) => {
   const raw = String(req.body.code || '').trim();
   const eventId = Number(req.body.event_id);
+  if (req.adminUser.role === 'assistant' && eventId !== req.adminUser.event_id) return res.status(403).json({ error: 'Этот QR относится к другому мероприятию' });
   if (!raw) return res.status(400).json({ error: 'Введите код из QR' });
   const byToken = db.prepare(`SELECT i.*, a.name, a.event_id, e.title FROM invitations i JOIN applicants a ON a.id=i.applicant_id JOIN events e ON e.id=a.event_id
     WHERE i.checkin_token=? ${eventId ? 'AND a.event_id=?' : ''}`).get(...(eventId ? [raw, eventId] : [raw]));
@@ -1051,7 +1060,7 @@ app.post('/admin/invite/:id', adminOnly, async (req, res) => { try { await sendI
 // as present, so keep old bookmarks harmless by redirecting to the safe UI.
 app.get('/admin/checkin', adminOnly, (_req, res) => res.redirect('/admin?page=checkin'));
 app.post('/admin/checkin', adminOnly, (_req, res) => res.redirect(303, '/admin?page=checkin'));
-app.get('/admin/export/:eventId', adminOnly, (req, res) => { const rows = db.prepare(`SELECT a.name,a.phone,a.telegram_name,a.was_school_student,a.status,i.status invitation_status,i.checked_in_at FROM applicants a LEFT JOIN invitations i ON i.applicant_id=a.id WHERE a.event_id=?`).all(req.params.eventId); const csv = ['name,phone,telegram_username,was_school_student,applicant_status,invitation_status,checked_in_at', ...rows.map(r => [r.name,r.phone,r.telegram_name,r.was_school_student === null ? '' : r.was_school_student ? 'yes' : 'no',r.status,r.invitation_status,r.checked_in_at].map(v => `"${String(v || '').replaceAll('"','""')}"`).join(','))].join('\n'); res.type('text/csv').attachment('guests.csv').send(csv); });
+app.get('/admin/export/:eventId', adminOnly, (req, res) => { if (req.adminUser.role === 'assistant') return res.status(403).send('Помощник не может выгружать данные гостей.'); const rows = db.prepare(`SELECT a.name,a.phone,a.telegram_name,a.was_school_student,a.status,i.status invitation_status,i.checked_in_at FROM applicants a LEFT JOIN invitations i ON i.applicant_id=a.id WHERE a.event_id=?`).all(req.params.eventId); const csv = ['name,phone,telegram_username,was_school_student,applicant_status,invitation_status,checked_in_at', ...rows.map(r => [r.name,r.phone,r.telegram_name,r.was_school_student === null ? '' : r.was_school_student ? 'yes' : 'no',r.status,r.invitation_status,r.checked_in_at].map(v => `"${String(v || '').replaceAll('"','""')}"`).join(','))].join('\n'); res.type('text/csv').attachment('guests.csv').send(csv); });
 function eventSettings(event, assets) {
   const field = (name, label, fallback = '') => `<label>${label}<textarea name="${name}" rows="3" placeholder="${esc(fallback)}">${esc(event[name] || fallback)}</textarea></label>`;
   return `<hr><details open><summary><strong>Тексты и материалы</strong></summary><form method="post" action="/admin/events/${event.id}/settings" class="settings">

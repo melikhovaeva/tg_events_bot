@@ -1765,12 +1765,14 @@ function Dialogs({
   );
 }
 
-function TeamSettings({ currentUser, users, auditLog, onChanged }) {
+function TeamSettings({ currentUser, users, events, auditLog, onChanged }) {
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [name, setName] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [role, setRole] = useState("director");
+  const [eventId, setEventId] = useState("");
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const changePassword = async (event) => {
@@ -1805,12 +1807,15 @@ function TeamSettings({ currentUser, users, auditLog, onChanged }) {
           display_name: name,
           username,
           password,
-          role: "director",
+          role,
+          event_id: eventId,
         }),
       });
       setName("");
       setUsername("");
       setPassword("");
+      setRole("director");
+      setEventId("");
       setNotice(
         "Учётная запись создана. Передайте директору логин и временный пароль.",
       );
@@ -1859,7 +1864,7 @@ function TeamSettings({ currentUser, users, auditLog, onChanged }) {
             <CardTitle>Мой пароль</CardTitle>
             <CardDescription>
               {currentUser?.display_name} ·{" "}
-              {currentUser?.role === "admin" ? "администратор" : "директор"}
+              {currentUser?.role === "admin" ? "администратор" : currentUser?.role === "assistant" ? "помощник мероприятия" : "директор"}
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -1888,9 +1893,9 @@ function TeamSettings({ currentUser, users, auditLog, onChanged }) {
         {currentUser?.role === "admin" && (
           <Card>
             <CardHeader>
-              <CardTitle>Добавить директора</CardTitle>
+              <CardTitle>Добавить сотрудника</CardTitle>
               <CardDescription>
-                Создайте отдельный вход для Евгении или Александра.
+                Директор работает со всей системой, помощник — только с одним мероприятием.
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -1918,6 +1923,18 @@ function TeamSettings({ currentUser, users, auditLog, onChanged }) {
                   minLength={10}
                   required
                 />
+                <label className="grid gap-1.5 text-sm font-medium">Роль
+                  <select value={role} onChange={(event) => setRole(event.target.value)} className="h-9 rounded-md border bg-background px-3 text-sm">
+                    <option value="director">Директор</option>
+                    <option value="assistant">Помощник мероприятия</option>
+                  </select>
+                </label>
+                {role === "assistant" && <label className="grid gap-1.5 text-sm font-medium">Мероприятие
+                  <select value={eventId} onChange={(event) => setEventId(event.target.value)} className="h-9 rounded-md border bg-background px-3 text-sm" required>
+                    <option value="">Выберите мероприятие</option>
+                    {events.map((event) => <option key={event.id} value={event.id}>{event.title}</option>)}
+                  </select>
+                </label>}
                 <Button className="w-fit">Создать учётную запись</Button>
               </form>
             </CardContent>
@@ -1948,7 +1965,7 @@ function TeamSettings({ currentUser, users, auditLog, onChanged }) {
                       <td className="py-3 font-medium">{user.display_name}</td>
                       <td className="py-3">{user.username}</td>
                       <td className="py-3">
-                        {user.role === "admin" ? "Администратор" : "Директор"}
+                        {user.role === "admin" ? "Администратор" : user.role === "assistant" ? `Помощник: ${user.event_title || "мероприятие удалено"}` : "Директор"}
                       </td>
                       <td className="py-3 text-muted-foreground">
                         {user.is_active ? "Активен" : "Отключён"}
@@ -2012,6 +2029,27 @@ function TeamSettings({ currentUser, users, auditLog, onChanged }) {
       )}
     </>
   );
+}
+
+function guestStatus(person) {
+  if (person.blocked) return "Доступ ограничен";
+  if (person.checked_in_at) return "Пришёл";
+  if (person.invitation_status === "confirmed" && person.reminder_sent_at && !person.final_confirmed_at) return "Ждём финального ответа";
+  if (person.invitation_status === "confirmed" && person.final_confirmed_at) return "Участие подтверждено";
+  if (person.invitation_status === "confirmed") return "Первично подтвердил";
+  return statusNames[person.invitation_status || person.status] || "—";
+}
+
+function GuestCards({ people, assistant = false, hideSearch = false, onInvite, invitingIds = [], onBlock, onRemove }) {
+  const [query, setQuery] = useState("");
+  const filtered = people.filter((person) => `${person.name || ""} ${person.telegram_name || ""}`.toLowerCase().includes(query.trim().toLowerCase()));
+  return <div className="md:hidden">{!hideSearch && <Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Найти по фамилии или @username" className="mb-3" />}<div className="grid gap-2">{filtered.map((person) => <div key={person.id} className="rounded-lg border bg-card p-4"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="font-semibold">{person.name}</p>{person.telegram_name && <p className="mt-0.5 text-sm text-muted-foreground">@{person.telegram_name}</p>}{!assistant && <p className="mt-0.5 text-sm text-muted-foreground">{person.phone}</p>}</div><span className="shrink-0 rounded-full bg-muted px-2 py-1 text-xs font-medium">{guestStatus(person)}</span></div>{!assistant && <div className="mt-3 flex flex-wrap gap-2">{person.telegram_id && !person.blocked && person.invitation_status !== "confirmed" && <Button size="sm" onClick={() => onInvite(person.id)} disabled={invitingIds.includes(person.id)}><Send size={14} />{invitingIds.includes(person.id) ? "Отправляем…" : "Пригласить"}</Button>}{person.telegram_id && <Button variant="outline" size="sm" onClick={() => onBlock(person)}>{person.blocked ? "Вернуть доступ" : "Ограничить доступ"}</Button>}<Button variant="outline" size="sm" className="text-destructive hover:text-destructive" onClick={() => onRemove(person)}>Удалить</Button></div>}</div>)}{!filtered.length && <p className="rounded-lg border p-4 text-sm text-muted-foreground">Гость не найден.</p>}</div></div>;
+}
+
+function AssistantEvent({ event, people, onCheckin }) {
+  const [query, setQuery] = useState("");
+  const filtered = people.filter((person) => `${person.name || ""} ${person.telegram_name || ""}`.toLowerCase().includes(query.trim().toLowerCase()));
+  return <><div className="flex flex-wrap items-end justify-between gap-3"><div><h1 className="text-3xl font-semibold tracking-tight">{event.title}</h1><p className="mt-2 text-muted-foreground">{fmt(event.starts_at)}</p></div><Button onClick={onCheckin}><QrCode size={16} />Чек-ин</Button></div><Card className="mt-6"><CardHeader><CardTitle>Гости</CardTitle><CardDescription>Найдите гостя по фамилии и проверьте его статус.</CardDescription></CardHeader><CardContent><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Найти по фамилии или @username" className="mb-3" /><GuestCards people={filtered} assistant hideSearch /><div className="hidden overflow-x-auto md:block"><table className="w-full text-sm"><thead><tr className="border-b text-left text-muted-foreground"><th className="pb-3">Участник</th><th className="pb-3">Telegram</th><th className="pb-3">Статус</th></tr></thead><tbody>{filtered.map((person) => <tr key={person.id} className="border-b last:border-0"><td className="py-3 font-medium">{person.name}</td><td className="py-3">{person.telegram_name ? `@${person.telegram_name}` : "—"}</td><td className="py-3">{guestStatus(person)}</td></tr>)}</tbody></table></div></CardContent></Card></>;
 }
 
 function App() {
@@ -2129,6 +2167,10 @@ function App() {
     if (initialPage === "dialogs" && initialDialog) loadDialog(initialDialog);
   }, []);
   const event = state.events.find((e) => e.id === active);
+  const isAssistant = state.currentUser?.role === "assistant";
+  useEffect(() => {
+    if (isAssistant && active && page === "events") setPage("detail");
+  }, [isAssistant, active, page]);
   const create = async (form, images) => {
     const body = new FormData(form);
     images.forEach((i) => body.append("images", i.file));
@@ -2320,7 +2362,7 @@ function App() {
     load(id);
     setPage("detail");
   };
-  const nav = [
+  const nav = isAssistant ? [] : [
     { id: "events", label: "Мероприятия", icon: LayoutDashboard },
     { id: "guests", label: "Гости", icon: Users },
     { id: "posts", label: "Посты", icon: MessageSquare },
@@ -2433,7 +2475,7 @@ function App() {
           </>
         )}
         {page === "detail" && event && (
-          <>
+          isAssistant ? <AssistantEvent event={event} people={state.people} onCheckin={() => setPage("checkin")} /> : <>
             <button
               onClick={() => setPage("events")}
               className="mb-5 text-sm text-muted-foreground hover:text-foreground"
@@ -2584,7 +2626,8 @@ function App() {
                 </p>
               )}
               <CardContent className="overflow-x-auto">
-                <table className="w-full min-w-[620px] text-sm">
+                <GuestCards people={state.people} onInvite={invite} invitingIds={invitingIds} onBlock={toggleBlock} onRemove={removeApplicant} />
+                <div className="hidden overflow-x-auto md:block"><table className="w-full min-w-[620px] text-sm">
                   <thead>
                     <tr className="border-b text-left text-muted-foreground">
                       <th className="w-10 pb-3">
@@ -2723,7 +2766,7 @@ function App() {
                       </tr>
                     ))}
                   </tbody>
-                </table>
+                </table></div>
               </CardContent>
             </Card>
           </>
@@ -2965,6 +3008,7 @@ function App() {
           <TeamSettings
             currentUser={state.currentUser}
             users={state.adminUsers || []}
+            events={state.events || []}
             auditLog={state.auditLog || []}
             onChanged={() => load(active)}
           />
