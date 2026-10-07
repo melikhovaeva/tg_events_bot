@@ -13,6 +13,7 @@ import { loginPage } from './lib/login-page.js';
 import { backupsDir, dbPath, ensureDataDirectories, uploadsDir } from './lib/paths.js';
 import { defaultText, esc, eventText, messageOptions, nowIso, richTextHtml, telegramHtml, token } from './lib/text.js';
 import { createInvitationService } from './services/invitations.js';
+import { sendMediaMessage } from './services/media-message.js';
 import { parseEventTime } from './lib/event-time.js';
 
 validateConfig();
@@ -310,6 +311,18 @@ const primaryAdminOnly = (req, res, next) => adminOnly(req, res, () => {
 });
 
 const bot = new Bot(process.env.BOT_TOKEN || '');
+// Invitation callbacks can now originate from a photo, not just a text message.
+bot.use(async (ctx, next) => {
+  if (ctx.callbackQuery?.message?.photo) {
+    ctx.editMessageText = async (text, options = {}) => {
+      const { link_preview_options, ...captionOptions } = options;
+      if (text.length <= 1024) return ctx.editMessageCaption({ caption: text, ...captionOptions });
+      await ctx.editMessageReplyMarkup({ reply_markup: undefined });
+      return ctx.reply(text, options);
+    };
+  }
+  return next();
+});
 const botEnabled = Boolean(process.env.BOT_TOKEN) && process.env.BOT_ENABLED !== 'false';
 const { runAutomation, sendAssets, sendInvite, sendMessageImages, updateInviteAttempt } = createInvitationService({ db, bot });
 async function sendCheckinQr(ctx, row, checkinToken, qr) {
@@ -1085,8 +1098,7 @@ app.post('/api/admin/posts/:id/send', adminOnly, async (req, res) => {
   const skipped = [];
   for (const { telegram_id: telegramId } of recipients) {
     try {
-      if (text) await bot.api.sendMessage(telegramId, text, messageOptions());
-      if (images.length) await bot.api.sendMediaGroup(telegramId, images.map((image) => ({ type: 'photo', media: new InputFile(path.join(uploadsDir, image.stored_name), image.original_name) })));
+      await sendMediaMessage(bot.api, telegramId, text, images);
       for (const file of files) await bot.api.sendDocument(telegramId, new InputFile(path.join(uploadsDir, file.stored_name), file.original_name));
       sent.push(telegramId);
       if (sent.length < recipients.length) await new Promise((resolve) => setTimeout(resolve, 60));

@@ -2,6 +2,7 @@ import path from 'node:path';
 import { InlineKeyboard, InputFile } from 'grammy';
 import { uploadsDir } from '../lib/paths.js';
 import { eventText, messageOptions, nowIso, token } from '../lib/text.js';
+import { sendMediaMessage } from './media-message.js';
 
 export function createInvitationService({ db, bot }) {
   const updateInviteAttempt = (invitationId, status, responded = false) => db.prepare(`UPDATE invitation_attempts SET status=?, responded_at=?
@@ -30,7 +31,8 @@ export function createInvitationService({ db, bot }) {
     db.prepare("UPDATE applicants SET status='invited' WHERE id=?").run(applicantId);
     const keyboard = new InlineKeyboard().text('Подтверждаю участие', `answer:yes:${invitation.id}`).text('Не смогу прийти', `answer:no:${invitation.id}`);
     try {
-      await bot.api.sendMessage(row.telegram_id, eventText(row, 'invite'), messageOptions({ reply_markup: keyboard }));
+      const images = db.prepare('SELECT * FROM event_message_images WHERE event_id=? AND message_key=? ORDER BY position').all(row.event_id, 'invite');
+      await sendMediaMessage(bot.api, row.telegram_id, eventText(row, 'invite'), images, keyboard);
     } catch (error) {
       // A pending invitation means that a person actually received a button to
       // answer.  Keep failed deliveries separate so the organiser can retry
@@ -40,7 +42,6 @@ export function createInvitationService({ db, bot }) {
       db.prepare("UPDATE applicants SET status='awaiting_review' WHERE id=?").run(applicantId);
       throw new Error(`Telegram не доставил приглашение: ${error.message}`);
     }
-    await sendMessageImages(row.telegram_id, row.event_id, 'invite');
   }
 
   async function runAutomation() {
@@ -60,8 +61,9 @@ export function createInvitationService({ db, bot }) {
     for (const row of upcoming) {
       if (row.telegram_id) {
         const keyboard = new InlineKeyboard().text('Буду', `final:yes:${row.id}`).text('Не смогу прийти', `final:no:${row.id}`);
-        await bot.api.sendMessage(row.telegram_id, eventText(row, 'reminder'), messageOptions({ reply_markup: keyboard })).catch(console.error);
-        await sendMessageImages(row.telegram_id, row.event_id, 'reminder'); await sendAssets(row.telegram_id, row.event_id, 'reminder');
+        const images = db.prepare('SELECT * FROM event_message_images WHERE event_id=? AND message_key=? ORDER BY position').all(row.event_id, 'reminder');
+        await sendMediaMessage(bot.api, row.telegram_id, eventText(row, 'reminder'), images, keyboard);
+        await sendAssets(row.telegram_id, row.event_id, 'reminder');
       }
       const finalExpiresAt = new Date(Math.min(Date.now() + 6 * 60 * 60 * 1000, new Date(row.starts_at).getTime())).toISOString();
       db.prepare('UPDATE invitations SET reminder_sent_at=?,final_expires_at=? WHERE id=?').run(nowIso(), finalExpiresAt, row.id);
