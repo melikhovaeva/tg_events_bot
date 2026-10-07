@@ -151,6 +151,7 @@ const mainKeyboard = () => new Keyboard()
 const userStatus = {
   awaiting_review: 'заявка рассматривается', pending: 'ждём ответа на приглашение',
   invited: 'ждём ответа на приглашение', confirmed: 'участие подтверждено',
+  delivery_failed: 'приглашение пока не доставлено — мы попробуем отправить его ещё раз',
   declined: 'участие отменено', expired: 'ответ не получен',
   final_expired: 'финальное подтверждение не получено', cancelled: 'регистрация отменена',
 };

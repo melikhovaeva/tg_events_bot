@@ -66,6 +66,7 @@ const statusNames = {
   awaiting_review: "Новая заявка",
   invited: "Ждёт ответа",
   pending: "Ждёт ответа",
+  delivery_failed: "Приглашение не доставлено",
   confirmed: "Подтвердил",
   declined: "Отказался",
   expired: "Не ответил за 24 часа",

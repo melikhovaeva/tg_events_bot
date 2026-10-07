@@ -29,7 +29,17 @@ export function createInvitationService({ db, bot }) {
     db.prepare("INSERT INTO invitation_attempts (applicant_id,invitation_id,status,sent_at,expires_at) VALUES (?,?,'pending',?,?)").run(applicantId, invitation.id, nowIso(), expiresAt);
     db.prepare("UPDATE applicants SET status='invited' WHERE id=?").run(applicantId);
     const keyboard = new InlineKeyboard().text('Подтверждаю участие', `answer:yes:${invitation.id}`).text('Не смогу прийти', `answer:no:${invitation.id}`);
-    await bot.api.sendMessage(row.telegram_id, eventText(row, 'invite'), messageOptions({ reply_markup: keyboard }));
+    try {
+      await bot.api.sendMessage(row.telegram_id, eventText(row, 'invite'), messageOptions({ reply_markup: keyboard }));
+    } catch (error) {
+      // A pending invitation means that a person actually received a button to
+      // answer.  Keep failed deliveries separate so the organiser can retry
+      // them instead of mistaking Telegram's error for a guest's silence.
+      db.prepare("UPDATE invitations SET status='delivery_failed' WHERE id=?").run(invitation.id);
+      updateInviteAttempt(invitation.id, 'delivery_failed');
+      db.prepare("UPDATE applicants SET status='awaiting_review' WHERE id=?").run(applicantId);
+      throw new Error(`Telegram не доставил приглашение: ${error.message}`);
+    }
     await sendMessageImages(row.telegram_id, row.event_id, 'invite');
   }
 
