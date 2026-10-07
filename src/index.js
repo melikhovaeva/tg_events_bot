@@ -558,7 +558,7 @@ async function showMyApplications(ctx) {
     const announcement = application.registration_text || application.description;
     const text = [
       `<b>«${esc(application.title)}»</b>`,
-      announcement && telegramHtml(announcement),
+      announcement && telegramHtml(announcement).trim(),
       `🗓 ${esc(date)}${application.venue ? `\n📍 ${esc(application.venue)}` : ''}`,
       `Статус: ${esc(userStatus[status] || status)}`,
     ].filter(Boolean).join('\n\n');
