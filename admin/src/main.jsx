@@ -1073,7 +1073,11 @@ function Checkin({ event, onBack, onCheckedIn }) {
     }
     try {
       stream.current = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: "environment" } },
+        video: {
+          facingMode: { ideal: "environment" },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        },
         audio: false,
       });
       if (!video.current) throw new Error("Видео камеры не подготовлено");
@@ -1085,18 +1089,23 @@ function Checkin({ event, onBack, onCheckedIn }) {
         const surface = canvas.current;
         if (!player || !surface || !stream.current) return;
         if (player.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
-          surface.width = player.videoWidth;
-          surface.height = player.videoHeight;
+          const scale = Math.min(
+            1,
+            1280 / Math.max(player.videoWidth, player.videoHeight),
+          );
+          surface.width = Math.max(1, Math.floor(player.videoWidth * scale));
+          surface.height = Math.max(1, Math.floor(player.videoHeight * scale));
           const context = surface.getContext("2d", {
             willReadFrequently: true,
           });
+          context?.drawImage(player, 0, 0, surface.width, surface.height);
           const found =
             context &&
             jsQR(
               context.getImageData(0, 0, surface.width, surface.height).data,
               surface.width,
               surface.height,
-              { inversionAttempts: "dontInvert" },
+              { inversionAttempts: "attemptBoth" },
             );
           if (found && !processing.current) {
             processing.current = true;

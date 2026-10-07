@@ -552,7 +552,7 @@ bot.callbackQuery(/^answer:(yes|no):(\d+)$/, async ctx => {
     await ctx.editMessageText(directCheckin ? 'Участие подтверждено. QR-код для входа придёт следующим сообщением.' : eventText(row, 'confirmed'), messageOptions({ reply_markup: new InlineKeyboard().text('Не смогу прийти', `cancel:${id}`) })); await sendMessageImages(row.telegram_id, row.event_id, 'confirmed');
     if (row.chat_url) await ctx.reply(`Пока можете присоединиться к чату мероприятия: ${row.chat_url}`);
     if (directCheckin) {
-      const qr = await QRCode.toBuffer(checkinToken, { width: 700, margin: 2 });
+      const qr = await QRCode.toBuffer(checkinToken, { width: 900, margin: 4, errorCorrectionLevel: 'H' });
       await sendAssets(row.telegram_id, row.event_id, 'confirmed');
       await ctx.replyWithPhoto(new InputFile(qr, 'checkin.png'), { caption: `Ваш QR для входа на «${row.title}». Сохраните его.\nРезервный код: ${checkinToken.slice(0, 8).toUpperCase()}` });
     }
@@ -579,7 +579,7 @@ bot.callbackQuery(/^final:(yes|no):(\d+)$/, async ctx => {
   if (answer === 'no') { db.prepare("UPDATE invitations SET status='declined', responded_at=? WHERE id=?").run(nowIso(), id); updateInviteAttempt(id, 'declined', true); db.prepare("UPDATE applicants SET status='declined' WHERE id=?").run(row.applicant_id); await ctx.editMessageText(eventText(row, 'declined'), messageOptions()); await sendMessageImages(row.telegram_id, row.event_id, 'declined'); return; }
   const checkinToken = token();
   db.prepare('UPDATE invitations SET final_confirmed_at=?,checkin_token=? WHERE id=?').run(nowIso(), checkinToken, id);
-  const qr = await QRCode.toBuffer(checkinToken, { width: 700, margin: 2 });
+  const qr = await QRCode.toBuffer(checkinToken, { width: 900, margin: 4, errorCorrectionLevel: 'H' });
   await ctx.editMessageText('Участие подтверждено. QR-код для входа придёт следующим сообщением.');
   await sendAssets(row.telegram_id, row.event_id, 'confirmed');
   await ctx.replyWithPhoto(new InputFile(qr, 'checkin.png'), { caption: `Ваш QR для входа на «${row.title}». Сохраните его.\nРезервный код: ${checkinToken.slice(0, 8).toUpperCase()}` });
