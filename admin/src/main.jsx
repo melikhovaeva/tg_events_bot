@@ -1723,13 +1723,13 @@ function Dialogs({
         Все, кто запустил бота. Откройте карточку, чтобы увидеть историю и
         написать человеку первым.
       </p>
-      <Card className="mt-7 overflow-hidden">
-        <div className="grid min-h-[560px] md:grid-cols-[290px_minmax(0,1fr)]">
-          <aside className="border-b md:border-b-0 md:border-r">
-            <div className="border-b px-4 py-3 text-sm font-medium">
+      <Card className="mt-5 min-h-0 flex-1 overflow-hidden">
+        <div className="grid h-full min-h-0 grid-rows-[minmax(0,30%)_minmax(0,1fr)] md:grid-cols-[290px_minmax(0,1fr)] md:grid-rows-1">
+          <aside className="flex min-h-0 flex-col overflow-hidden border-b md:border-b-0 md:border-r">
+            <div className="shrink-0 border-b px-4 py-3 text-sm font-medium">
               Все пользователи бота
             </div>
-            <div className="max-h-[500px] overflow-y-auto p-2">
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-2">
               {conversations.length ? (
                 conversations.map((item) => (
                   <button
@@ -1766,7 +1766,7 @@ function Dialogs({
               )}
             </div>
           </aside>
-          <section className="flex min-w-0 flex-col">
+          <section className="flex min-h-0 min-w-0 flex-col overflow-hidden">
             {!conversation ? (
               <div className="flex flex-1 items-center justify-center p-6 text-center text-sm text-muted-foreground">
                 Выберите пользователя слева, чтобы прочитать сообщения или
@@ -1774,7 +1774,7 @@ function Dialogs({
               </div>
             ) : (
               <>
-                <div className="border-b px-5 py-3">
+                <div className="shrink-0 border-b px-5 py-3">
                   <b>
                     {conversation.telegram_name
                       ? `@${conversation.telegram_name}`
@@ -1784,7 +1784,7 @@ function Dialogs({
                     Ответ будет отправлен в личный чат с ботом.
                   </p>
                 </div>
-                <div className="flex flex-1 flex-col gap-3 overflow-y-auto bg-muted/20 p-4 sm:p-5">
+                <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain bg-muted/20 p-4 sm:p-5 [&>div]:shrink-0">
                   {messages.map((message) => (
                     <div
                       key={message.id}
@@ -1801,7 +1801,7 @@ function Dialogs({
                     </div>
                   ))}
                 </div>
-                <div className="border-t p-3 sm:p-4">
+                <div className="shrink-0 border-t p-3 sm:p-4">
                   <div className="flex gap-2">
                     <Textarea
                       value={text}
@@ -2587,7 +2587,7 @@ function App() {
           </nav>
         )}
       </header>
-      <main className="mx-auto max-w-7xl min-w-0 p-6 lg:p-10">
+      <main className={`mx-auto max-w-7xl min-w-0 p-6 lg:p-10 ${page === "dialogs" ? "flex h-[calc(100dvh-57px)] min-h-0 flex-col overflow-hidden" : ""}`}>
         {error && (
           <p className="mb-5 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
             {error}
