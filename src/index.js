@@ -140,6 +140,7 @@ for (const [table, column, definition] of [
   ['telegram_profiles', 'was_school_student', 'INTEGER'],
   ['profile_drafts', 'phone', 'TEXT'],
   ['admin_sessions', 'user_id', 'INTEGER REFERENCES admin_users(id)'],
+  ['admin_users', 'is_active', 'INTEGER NOT NULL DEFAULT 1'],
 ]) {
   try { db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`); } catch { /* already exists */ }
 }
@@ -227,7 +228,7 @@ function currentAdmin(req) {
   const id = readCookie(req, 'event_ops_session');
   if (!id) return null;
   const session = db.prepare(`SELECT s.id AS session_id, s.expires_at, u.id, u.username, u.display_name, u.role
-    FROM admin_sessions s JOIN admin_users u ON u.id=s.user_id WHERE s.id=?`).get(id);
+    FROM admin_sessions s JOIN admin_users u ON u.id=s.user_id WHERE s.id=? AND u.is_active=1`).get(id);
   if (!session || session.expires_at <= Date.now()) {
     db.prepare('DELETE FROM admin_sessions WHERE id=?').run(id);
     return null;
@@ -602,7 +603,7 @@ app.get('/login', (req, res) => res.redirect(isAdmin(req) ? '/admin' : `/login/f
 app.get('/login/form', (req, res) => res.type('html').send(loginPage(req.query.error === '1')));
 app.post('/login', (req, res) => {
   const username = String(req.body.username || 'admin').trim().toLowerCase();
-  const user = db.prepare('SELECT * FROM admin_users WHERE username=?').get(username);
+  const user = db.prepare('SELECT * FROM admin_users WHERE username=? AND is_active=1').get(username);
   if (!user || !passwordMatches(req.body.password, user.password_hash)) return res.redirect('/login/form?error=1');
   const sessionId = crypto.randomBytes(32).toString('base64url');
   db.prepare('DELETE FROM admin_sessions WHERE expires_at <= ?').run(Date.now());
@@ -648,7 +649,7 @@ app.get('/api/admin/state', adminOnly, (req, res) => {
   const postRecipients = db.prepare('SELECT post_id,telegram_id FROM post_recipients').all();
   const postSendSummaries = db.prepare(`SELECT s.* FROM post_sends s
     JOIN (SELECT post_id, MAX(id) AS id FROM post_sends GROUP BY post_id) latest ON latest.id=s.id`).all();
-  const adminUsers = req.adminUser.role === 'admin' ? db.prepare('SELECT id,username,display_name,role,created_at,last_login_at FROM admin_users ORDER BY role, display_name').all() : [];
+  const adminUsers = req.adminUser.role === 'admin' ? db.prepare('SELECT id,username,display_name,role,is_active,created_at,last_login_at FROM admin_users ORDER BY role, display_name').all() : [];
   const auditLog = req.adminUser.role === 'admin' ? db.prepare('SELECT * FROM admin_audit_log ORDER BY id DESC LIMIT 60').all() : [];
   res.json({ events, selected, people, assets, guests, messageImages, eventImages, posts, postImages, postFiles, postRecipients, postSendSummaries, conversations, adminUsers, auditLog, currentUser: req.adminUser, botUsername: process.env.BOT_USERNAME });
 });
@@ -658,7 +659,10 @@ app.post('/api/admin/account/password', adminOnly, (req, res) => {
   const user = db.prepare('SELECT * FROM admin_users WHERE id=?').get(req.adminUser.id);
   if (!passwordMatches(currentPassword, user.password_hash)) return res.status(400).json({ error: 'Текущий пароль введён неверно' });
   if (newPassword.length < 10) return res.status(400).json({ error: 'Новый пароль должен содержать не меньше 10 символов' });
-  db.prepare('UPDATE admin_users SET password_hash=? WHERE id=?').run(passwordHash(newPassword), user.id);
+  db.transaction(() => {
+    db.prepare('UPDATE admin_users SET password_hash=? WHERE id=?').run(passwordHash(newPassword), user.id);
+    db.prepare('DELETE FROM admin_sessions WHERE user_id=? AND id!=?').run(user.id, readCookie(req, 'event_ops_session'));
+  })();
   res.json({ ok: true });
 });
 app.post('/api/admin/users', primaryAdminOnly, (req, res) => {
@@ -676,6 +680,18 @@ app.post('/api/admin/users', primaryAdminOnly, (req, res) => {
     if (String(error.message).includes('UNIQUE')) return res.status(400).json({ error: 'Этот логин уже занят' });
     throw error;
   }
+});
+app.post('/api/admin/users/:id/status', primaryAdminOnly, (req, res) => {
+  const userId = Number(req.params.id);
+  const active = Boolean(req.body.active);
+  const user = db.prepare('SELECT * FROM admin_users WHERE id=?').get(userId);
+  if (!user) return res.sendStatus(404);
+  if (user.id === req.adminUser.id && !active) return res.status(400).json({ error: 'Нельзя отключить собственную учётную запись' });
+  db.transaction(() => {
+    db.prepare('UPDATE admin_users SET is_active=? WHERE id=?').run(active ? 1 : 0, user.id);
+    if (!active) db.prepare('DELETE FROM admin_sessions WHERE user_id=?').run(user.id);
+  })();
+  res.json({ ok: true });
 });
 app.get('/admin/legacy', adminOnly, (req, res) => {
   const events = db.prepare('SELECT * FROM events ORDER BY starts_at DESC').all();
