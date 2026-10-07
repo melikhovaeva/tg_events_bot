@@ -1845,6 +1845,24 @@ function auditLabel(entry) {
 }
 
 function TeamSettings({ currentUser, users, events, auditLog, auditHasMore, onChanged }) {
+  const [assigningUser, setAssigningUser] = useState(null);
+  const [assignedEvent, setAssignedEvent] = useState("");
+  const [savingAssignment, setSavingAssignment] = useState(false);
+  const saveAssignment = async (event) => {
+    event.preventDefault();
+    setSavingAssignment(true);
+    setError("");
+    try {
+      await request(`/api/admin/users/${assigningUser.id}/event`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ event_id: assignedEvent || null }),
+      });
+      setAssigningUser(null);
+      setNotice("Назначение помощника обновлено.");
+      await onChanged();
+    } catch (e) { setError(e.message); }
+    finally { setSavingAssignment(false); }
+  };
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [name, setName] = useState("");
@@ -2077,6 +2095,10 @@ function TeamSettings({ currentUser, users, events, auditLog, auditHasMore, onCh
                           : "Ещё не входил"}
                       </td>
                       <td className="py-3 text-right">
+                        {user.role === "assistant" && <Button variant="outline" size="sm" className="mr-2" onClick={() => {
+                          setAssigningUser(user);
+                          setAssignedEvent(user.event_id ? String(user.event_id) : "");
+                        }}>Сменить мероприятие</Button>}
                         <Button
                           variant="outline"
                           size="sm"
@@ -2139,6 +2161,20 @@ function TeamSettings({ currentUser, users, events, auditLog, auditHasMore, onCh
           </Card>
         </>
       )}
+      <Dialog open={Boolean(assigningUser)} onOpenChange={(open) => !open && !savingAssignment && setAssigningUser(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader><DialogTitle>Мероприятие помощника</DialogTitle><DialogDescription>{assigningUser?.display_name} получит доступ только к выбранному мероприятию.</DialogDescription></DialogHeader>
+          <form onSubmit={saveAssignment} className="grid gap-4">
+            <label className="grid gap-1.5 text-sm font-medium">Мероприятие
+              <select value={assignedEvent} onChange={(e) => setAssignedEvent(e.target.value)} className="h-10 rounded-md border bg-background px-3 text-sm" disabled={savingAssignment}>
+                <option value="">Без мероприятия</option>
+                {events.map((event) => <option key={event.id} value={event.id}>{event.title} · {fmt(event.starts_at)}</option>)}
+              </select>
+            </label>
+            <div className="flex justify-end gap-2"><Button type="button" variant="outline" disabled={savingAssignment} onClick={() => setAssigningUser(null)}>Отмена</Button><Button disabled={savingAssignment}>{savingAssignment ? "Сохраняем…" : "Сохранить"}</Button></div>
+          </form>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

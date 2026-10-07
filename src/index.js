@@ -763,6 +763,17 @@ app.post('/api/admin/users/:id/status', primaryAdminOnly, (req, res) => {
   setAudit(req, active ? 'Восстановил доступ сотрудника' : 'Отключил доступ сотрудника', user.display_name);
   res.json({ ok: true });
 });
+app.post('/api/admin/users/:id/event', primaryAdminOnly, (req, res) => {
+  const user = db.prepare('SELECT * FROM admin_users WHERE id=?').get(req.params.id);
+  if (!user) return res.status(404).json({ error: 'Сотрудник не найден' });
+  if (user.role !== 'assistant') return res.status(400).json({ error: 'Назначение мероприятия доступно только для помощников' });
+  const eventId = req.body.event_id === null || req.body.event_id === '' ? null : Number(req.body.event_id);
+  const event = eventId === null ? null : db.prepare('SELECT id,title FROM events WHERE id=?').get(eventId);
+  if (eventId !== null && (!Number.isInteger(eventId) || !event)) return res.status(400).json({ error: 'Выберите существующее мероприятие' });
+  db.prepare('UPDATE admin_users SET event_id=? WHERE id=?').run(eventId, user.id);
+  setAudit(req, 'Изменил назначение помощника', `${user.display_name} · ${event?.title || 'без мероприятия'}`);
+  res.json({ ok: true });
+});
 app.get('/admin/legacy', adminOnly, (req, res) => {
   if (req.adminUser.role === 'assistant') return res.status(403).send('Доступ ограничен назначенным мероприятием.');
   const events = db.prepare('SELECT * FROM events ORDER BY starts_at DESC').all();
