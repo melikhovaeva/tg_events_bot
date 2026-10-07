@@ -607,26 +607,61 @@ function EventTexts({ event, messageImages = [], onEdit }) {
 function RichTextEditor({ value, onChange, placeholder }) {
   const ref = useRef(null);
   const range = useRef(null);
+  const lastEmitted = useRef(null);
+  const [activeFormats, setActiveFormats] = useState({});
+  const [selectedText, setSelectedText] = useState("");
   const [linkOpen, setLinkOpen] = useState(false);
   const [linkUrl, setLinkUrl] = useState("");
   const [linkError, setLinkError] = useState("");
   useEffect(() => {
+    // React echoes every keystroke back through value. Do not replace the DOM
+    // for that echo: doing so destroys the browser's selection and undo stack.
+    if (value === lastEmitted.current) return;
     const normalized = editorHtml(value);
     if (ref.current && ref.current.innerHTML !== normalized)
       ref.current.innerHTML = normalized;
   }, [value]);
+  const emit = () => {
+    const html = ref.current?.innerHTML || "";
+    lastEmitted.current = html;
+    onChange(html);
+  };
+  const selectedAnchor = () => {
+    const selection = window.getSelection();
+    const node = selection?.anchorNode;
+    const element = node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement;
+    const anchor = element?.closest("a");
+    return anchor && ref.current?.contains(anchor) ? anchor : null;
+  };
+  useEffect(() => {
+    const update = () => {
+      const selection = window.getSelection();
+      if (!selection?.anchorNode || !ref.current?.contains(selection.anchorNode)) return;
+      range.current = selection.rangeCount ? selection.getRangeAt(0).cloneRange() : null;
+      setActiveFormats({ bold: document.queryCommandState("bold"), italic: document.queryCommandState("italic"), underline: document.queryCommandState("underline"), strikeThrough: document.queryCommandState("strikeThrough"), link: Boolean(selectedAnchor()) });
+    };
+    document.addEventListener("selectionchange", update);
+    return () => document.removeEventListener("selectionchange", update);
+  }, []);
   const preserve = (event) => event.preventDefault();
   const command = (name, arg = null) => {
     ref.current?.focus();
     document.execCommand(name, false, arg);
-    onChange(ref.current?.innerHTML || "");
+    emit();
   };
   const openLink = () => {
     const selection = window.getSelection();
     range.current = selection?.rangeCount
       ? selection.getRangeAt(0).cloneRange()
       : null;
-    setLinkUrl("");
+    const anchor = selectedAnchor();
+    if (anchor) {
+      const linkRange = document.createRange();
+      linkRange.selectNodeContents(anchor);
+      range.current = linkRange;
+    }
+    setSelectedText(range.current?.toString() || "");
+    setLinkUrl(anchor?.getAttribute("href") || "");
     setLinkError("");
     setLinkOpen(true);
   };
@@ -647,7 +682,12 @@ function RichTextEditor({ value, onChange, placeholder }) {
     }
     const selected = window.getSelection()?.toString();
     if (selected) command("createLink", linkUrl);
-    else command("insertHTML", `<a href="${linkUrl}">${linkUrl}</a>`);
+    else {
+      const anchor = document.createElement("a");
+      anchor.href = linkUrl;
+      anchor.textContent = linkUrl;
+      command("insertHTML", anchor.outerHTML);
+    }
     setLinkOpen(false);
   };
   const tools = [
@@ -666,9 +706,10 @@ function RichTextEditor({ value, onChange, placeholder }) {
               type="button"
               title={label}
               aria-label={label}
+              aria-pressed={Boolean(activeFormats[name])}
               onMouseDown={preserve}
               onClick={() => command(name)}
-              className="rounded p-1.5 hover:bg-background"
+              className={`rounded p-1.5 hover:bg-background ${activeFormats[name] ? "bg-background ring-1 ring-border" : ""}`}
             >
               <Icon size={16} />
             </button>
@@ -678,9 +719,10 @@ function RichTextEditor({ value, onChange, placeholder }) {
             type="button"
             title="Вставить ссылку"
             aria-label="Вставить ссылку"
+            aria-pressed={Boolean(activeFormats.link)}
             onMouseDown={preserve}
             onClick={openLink}
-            className="rounded p-1.5 hover:bg-background"
+            className={`rounded p-1.5 hover:bg-background ${activeFormats.link ? "bg-background ring-1 ring-border" : ""}`}
           >
             <Link size={16} />
           </button>
@@ -692,8 +734,8 @@ function RichTextEditor({ value, onChange, placeholder }) {
           role="textbox"
           aria-multiline="true"
           data-placeholder={placeholder}
-          onInput={(event) => onChange(event.currentTarget.innerHTML)}
-          className="min-h-44 px-3 py-2.5 text-sm leading-6 outline-none empty:before:pointer-events-none empty:before:text-muted-foreground empty:before:content-[attr(data-placeholder)] [&_div]:mb-3 [&_p]:mb-3 [&_div:last-child]:mb-0 [&_p:last-child]:mb-0"
+          onInput={emit}
+          className="min-h-44 px-3 py-2.5 text-sm leading-6 outline-none empty:before:pointer-events-none empty:before:text-muted-foreground empty:before:content-[attr(data-placeholder)] [&_a]:text-blue-600 [&_a]:underline [&_a]:decoration-1 [&_a]:underline-offset-2 [&_div]:mb-3 [&_p]:mb-3 [&_div:last-child]:mb-0 [&_p:last-child]:mb-0"
         />
       </div>
       <Dialog open={linkOpen} onOpenChange={setLinkOpen}>
@@ -701,7 +743,7 @@ function RichTextEditor({ value, onChange, placeholder }) {
           <DialogHeader>
             <DialogTitle>Добавить ссылку</DialogTitle>
             <DialogDescription>
-              Выделите текст в сообщении или вставьте ссылку отдельно.
+              {selectedText ? `Ссылка будет применена к тексту «${selectedText}».` : "Ссылка будет вставлена в текст сообщения."}
             </DialogDescription>
           </DialogHeader>
           <form onSubmit={addLink} className="grid gap-4">
@@ -723,6 +765,13 @@ function RichTextEditor({ value, onChange, placeholder }) {
               <p className="text-sm text-destructive">{linkError}</p>
             )}
             <div className="flex justify-end gap-2">
+              {activeFormats.link && <Button type="button" variant="outline" onClick={() => {
+                ref.current?.focus();
+                const selection = window.getSelection();
+                if (range.current) { selection.removeAllRanges(); selection.addRange(range.current); }
+                command("unlink");
+                setLinkOpen(false);
+              }}>Убрать ссылку</Button>}
               <Button
                 type="button"
                 variant="outline"
