@@ -584,7 +584,22 @@ async function showMyApplications(ctx) {
       announcement && telegramHtml(announcement).trim(),
       `Статус: ${esc(userStatus[status] || status)}`,
     ].filter(Boolean).join('\n\n');
-    await ctx.reply(text, messageOptions({ reply_markup: keyboard }));
+    const images = db.prepare('SELECT * FROM event_images WHERE event_id=? ORDER BY position').all(application.event_id);
+    const registrationImages = db.prepare('SELECT * FROM event_message_images WHERE event_id=? AND message_key=? ORDER BY position').all(application.event_id, 'registration');
+    if (!images.length) {
+      const event = db.prepare('SELECT cover_stored_name,cover_original_name FROM events WHERE id=?').get(application.event_id);
+      if (event?.cover_stored_name) images.push({ stored_name: event.cover_stored_name, original_name: event.cover_original_name || 'cover' });
+    }
+    // Match the event announcement, including images attached in its text editor.
+    const announcementImages = [...images, ...registrationImages];
+    if (announcementImages.length > 10) {
+      for (let offset = 0; offset < announcementImages.length; offset += 10) {
+        await sendMediaMessage(bot.api, ctx.chat.id, '', announcementImages.slice(offset, offset + 10));
+      }
+      await ctx.reply(text, messageOptions({ reply_markup: keyboard }));
+    } else {
+      await sendMediaMessage(bot.api, ctx.chat.id, text, announcementImages, keyboard);
+    }
   }
 }
 bot.callbackQuery(/^event:(\d+)$/, async ctx => {
