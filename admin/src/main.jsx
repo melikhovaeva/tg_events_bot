@@ -1264,11 +1264,9 @@ function RecipientPicker({ people, selectedIds, setSelectedIds }) {
         : [...current, telegramId],
     );
   return (
-    <div className="rounded-md border p-3">
+    <div className="rounded-md border bg-muted/20 p-3">
       <div className="flex items-center justify-between gap-3">
-        <span className="text-sm font-medium">
-          Получатели: {selectedIds.length}
-        </span>
+        <div><p className="text-sm font-medium">Получатели: {selectedIds.length}</p><p className="text-xs text-muted-foreground">Доступно в боте: {people.length}</p></div>
         <Input
           value={query}
           onChange={(event) => setQuery(event.target.value)}
@@ -1590,13 +1588,7 @@ function PostEditor({
               </label>
             )}
           </div>
-          {audience === "manual" && (
-            <RecipientPicker
-              people={conversations}
-              selectedIds={recipientIds}
-              setSelectedIds={setRecipientIds}
-            />
-          )}
+          {audience === "manual" && <div className="grid gap-2"><p className="text-sm font-medium">Кому отправить</p><RecipientPicker people={conversations} selectedIds={recipientIds} setSelectedIds={setRecipientIds} /></div>}
           {error && <p className="text-sm text-destructive">{error}</p>}
           <div className="flex justify-end gap-2">
             <Button variant="outline" onClick={onBack}>
