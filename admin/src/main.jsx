@@ -4,6 +4,7 @@ import jsQR from "jsqr";
 import {
   CalendarDays,
   ArrowDown,
+  Download,
   Ban,
   Bold,
   Check,
@@ -2766,6 +2767,9 @@ function App() {
                   onClick={removeEvent}
                 >
                   <Trash2 size={15} />
+                </Button>
+                <Button asChild variant="outline" className="h-9 w-9 p-0" title="Скачать все заявки в Excel" aria-label="Скачать все заявки в Excel">
+                  <a href={`/api/admin/events/${event.id}/export.xlsx`}><Download size={15} /></a>
                 </Button>
               </div>
             </div>

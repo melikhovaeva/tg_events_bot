@@ -15,6 +15,7 @@ import { defaultText, esc, eventText, messageOptions, nowIso, richTextHtml, tele
 import { createInvitationService } from './services/invitations.js';
 import { sendMediaMessage } from './services/media-message.js';
 import { parseEventTime } from './lib/event-time.js';
+import { guestWorkbook } from './lib/guest-export.js';
 import { profileNameError } from './lib/profile-name.js';
 
 validateConfig();
@@ -1190,6 +1191,15 @@ app.post('/admin/invite/:id', adminOnly, async (req, res) => { try { await sendI
 // The React check-in screen is the only supported admission flow.  The old
 // form did not validate the invitation status and could mark a declined guest
 // as present, so keep old bookmarks harmless by redirecting to the safe UI.
+app.get('/api/admin/events/:id/export.xlsx', adminOnly, async (req, res) => {
+  if (req.adminUser.role === 'assistant') return res.status(403).json({ error: 'Помощник не может выгружать данные гостей' });
+  const event = db.prepare('SELECT id,title FROM events WHERE id=?').get(req.params.id);
+  if (!event) return res.sendStatus(404);
+  const people = db.prepare(`SELECT a.*, i.status invitation_status, i.final_confirmed_at, i.reminder_sent_at, i.checked_in_at
+    FROM applicants a LEFT JOIN invitations i ON i.applicant_id=a.id WHERE a.event_id=? ORDER BY a.name COLLATE NOCASE`).all(event.id);
+  const buffer = await guestWorkbook(event, people);
+  res.type('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet').attachment(`event-${event.id}-guests.xlsx`).send(Buffer.from(buffer));
+});
 app.get('/admin/checkin', adminOnly, (_req, res) => res.redirect('/admin?page=checkin'));
 app.post('/admin/checkin', adminOnly, (_req, res) => res.redirect(303, '/admin?page=checkin'));
 app.get('/admin/export/:eventId', adminOnly, (req, res) => { if (req.adminUser.role === 'assistant') return res.status(403).send('Помощник не может выгружать данные гостей.'); const rows = db.prepare(`SELECT a.name,a.phone,a.telegram_name,a.was_school_student,a.status,i.status invitation_status,i.checked_in_at FROM applicants a LEFT JOIN invitations i ON i.applicant_id=a.id WHERE a.event_id=?`).all(req.params.eventId); const csv = ['name,phone,telegram_username,was_school_student,applicant_status,invitation_status,checked_in_at', ...rows.map(r => [r.name,r.phone,r.telegram_name,r.was_school_student === null ? '' : r.was_school_student ? 'yes' : 'no',r.status,r.invitation_status,r.checked_in_at].map(v => `"${String(v || '').replaceAll('"','""')}"`).join(','))].join('\n'); res.type('text/csv').attachment('guests.csv').send(csv); });
