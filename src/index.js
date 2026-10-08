@@ -15,6 +15,7 @@ import { defaultText, esc, eventText, messageOptions, nowIso, richTextHtml, tele
 import { createInvitationService } from './services/invitations.js';
 import { sendMediaMessage } from './services/media-message.js';
 import { parseEventTime } from './lib/event-time.js';
+import { profileNameError } from './lib/profile-name.js';
 
 validateConfig();
 
@@ -375,7 +376,7 @@ async function requestProfile(ctx, continuation = '') {
   const telegramId = String(ctx.from.id);
   db.prepare(`INSERT INTO profile_drafts (telegram_id,continuation,stage,name,phone) VALUES (?,?,'name',NULL,NULL)
     ON CONFLICT(telegram_id) DO UPDATE SET continuation=excluded.continuation,stage='name',name=NULL,phone=NULL`).run(telegramId, continuation || '');
-  return ctx.reply('Спасибо. Теперь сохраним данные для регистрации на мероприятия Perasperadastra.\n\nФИО и номер телефона будут использоваться, чтобы оформить ваши будущие заявки и связаться с вами по событию.\n\nНапишите ваши имя и фамилию.', { reply_markup: { remove_keyboard: true } });
+  return ctx.reply('Давайте познакомимся! Сохраним ваши данные, чтобы использовать их для будущих заявок на мероприятия Perasperadastra.\n\nШаг 1 из 3. Напишите полное ФИО: фамилию, имя и отчество, если есть.\n\nСейчас нужен только текст ФИО — телефон попросим на следующем шаге.', { reply_markup: { remove_keyboard: true } });
 }
 async function requestSchoolStatus(ctx, continuation, profile) {
   const telegramId = String(ctx.from.id);
@@ -383,7 +384,7 @@ async function requestSchoolStatus(ctx, continuation, profile) {
     ON CONFLICT(telegram_id) DO UPDATE SET continuation=excluded.continuation,stage='school',name=excluded.name,phone=excluded.phone`)
     .run(telegramId, continuation || '', profile.name, profile.phone);
   const keyboard = new InlineKeyboard().text('Да', 'school:yes').text('Нет', 'school:no');
-  return ctx.reply('Подскажите, пожалуйста: вы были студентом школы Perasperadastra?', { reply_markup: keyboard });
+  return ctx.reply('Шаг 3 из 3. Вы учились или сейчас учитесь в школе Perasperadastra?', { reply_markup: keyboard });
 }
 async function continueStart(ctx, claim) {
   const profile = db.prepare('SELECT * FROM telegram_profiles WHERE telegram_id=?').get(String(ctx.from.id));
@@ -458,7 +459,7 @@ bot.callbackQuery(/^school:(yes|no)$/, async ctx => {
     .run(telegramId, draft.name, draft.phone, ctx.from.username || null, wasSchoolStudent, nowIso(), nowIso());
   db.prepare('DELETE FROM profile_drafts WHERE telegram_id=?').run(telegramId);
   await ctx.answerCallbackQuery({ text: 'Ответ сохранён' });
-  await ctx.editMessageText('Спасибо, ответ сохранён.');
+  await ctx.editMessageText('Всё готово 🖤 Данные сохранены — при подаче заявки заполнять их заново не понадобится.');
   return continueStart(ctx, draft.continuation);
 });
 
@@ -499,7 +500,8 @@ bot.on('message:contact', async ctx => {
   if (profileDraft && ctx.message.contact.user_id === ctx.from.id) {
     db.prepare("UPDATE profile_drafts SET stage='school',phone=? WHERE telegram_id=?").run(ctx.message.contact.phone_number, telegramId);
     const keyboard = new InlineKeyboard().text('Да', 'school:yes').text('Нет', 'school:no');
-    return ctx.reply('Подскажите, пожалуйста: вы были студентом школы Perasperadastra?', { reply_markup: keyboard });
+    await ctx.reply('Номер телефона сохранён.', { reply_markup: { remove_keyboard: true } });
+    return ctx.reply('Шаг 3 из 3. Вы учились или сейчас учитесь в школе Perasperadastra?', { reply_markup: keyboard });
   }
   const draft = db.prepare("SELECT * FROM application_drafts WHERE telegram_id=? AND stage='phone'").get(telegramId);
   if (!draft || ctx.message.contact.user_id !== ctx.from.id) return;
@@ -520,13 +522,14 @@ bot.on('message:text', async ctx => {
   if (profileDraft) {
     const text = ctx.message.text.trim();
     if (profileDraft.stage === 'name') {
-      if (text.length < 3) return ctx.reply('Напишите, пожалуйста, имя и фамилию полностью.');
+      const nameError = profileNameError(text);
+      if (nameError) return ctx.reply(nameError);
       db.prepare("UPDATE profile_drafts SET stage='phone',name=? WHERE telegram_id=?").run(text, telegramId);
-      const keyboard = new Keyboard().requestContact('📱 Отправить мой номер').resized().oneTime();
-      return ctx.reply('Теперь отправьте номер телефона кнопкой ниже. Он нужен для связи по мероприятию.', { reply_markup: keyboard });
+      const keyboard = new Keyboard().requestContact('Поделиться номером телефона').resized().oneTime();
+      return ctx.reply('Спасибо! Шаг 2 из 3 — номер телефона для связи по мероприятию.\n\nНажмите кнопку «Поделиться номером телефона» ниже.', { reply_markup: keyboard });
     }
     if (profileDraft.stage === 'school') return ctx.reply('Пожалуйста, выберите «Да» или «Нет» кнопкой выше.');
-    return ctx.reply('Для продолжения нажмите «Отправить мой номер».');
+    return ctx.reply('Для продолжения нажмите «Поделиться номером телефона» — так мы сохраним ваш номер без ошибок.', { reply_markup: new Keyboard().requestContact('Поделиться номером телефона').resized().oneTime() });
   }
   const draft = db.prepare('SELECT * FROM application_drafts WHERE telegram_id=?').get(telegramId);
   if (!draft) {
