@@ -49,13 +49,24 @@ test('invitation is pending only after Telegram accepts the message', async () =
 });
 
 test('failed Telegram invitation is visible as a delivery failure and can be retried', async () => {
-  const { db, service } = setup({ sendMessage: async () => { throw new Error('bot was blocked by the user'); } });
+  const { db, service } = setup({ sendMessage: async () => { throw new Error('network unavailable'); } });
 
   await assert.rejects(() => service.sendInvite(1), /Telegram не доставил приглашение/);
 
   assert.equal(db.prepare('SELECT status FROM invitations WHERE applicant_id=1').get().status, 'delivery_failed');
   assert.equal(db.prepare('SELECT status FROM applicants WHERE id=1').get().status, 'awaiting_review');
   assert.equal(db.prepare('SELECT status FROM invitation_attempts').get().status, 'delivery_failed');
+});
+
+test('Telegram user block has a distinct status and remains retryable', async () => {
+  let blocked = true;
+  const { db, service } = setup({ sendMessage: async () => { if (blocked) throw new Error('403: Forbidden: bot was blocked by the user'); } });
+  await assert.rejects(() => service.sendInvite(1), /Пользователь заблокировал бота/);
+  assert.equal(db.prepare('SELECT status FROM invitations').get().status, 'bot_blocked');
+  assert.equal(db.prepare('SELECT status FROM invitation_attempts').get().status, 'bot_blocked');
+  blocked = false;
+  await service.sendInvite(1);
+  assert.equal(db.prepare('SELECT status FROM invitations').get().status, 'pending');
 });
 
 test('automation expires an unanswered initial invitation', async () => {

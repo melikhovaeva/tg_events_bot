@@ -71,6 +71,7 @@ const statusNames = {
   invited: "Ждёт ответа",
   pending: "Ждёт ответа",
   delivery_failed: "Приглашение не доставлено",
+  bot_blocked: "Бот заблокирован пользователем",
   confirmed: "Подтвердил",
   declined: "Отказался",
   rejected: "Отказ организатора",
@@ -2217,7 +2218,7 @@ function guestStatus(person) {
     : person.checked_in_at ? "attended"
     : status === "confirmed" ? (person.reminder_sent_at && !person.final_confirmed_at ? "waiting" : "success")
     : ["pending", "invited", "expired", "final_expired"].includes(status) ? "waiting"
-    : status === "delivery_failed" || status === "rejected" ? "error"
+    : ["delivery_failed", "bot_blocked", "rejected"].includes(status) ? "error"
     : ["declined", "cancelled"].includes(status) ? "inactive"
     : "new";
   return <span className={`guest-status guest-status--${tone}`}>{guestStatusLabel(person)}</span>;
@@ -2437,6 +2438,11 @@ function App() {
         },
       );
       const result = await response.json();
+      if (!result.sent.length && result.skipped[0]?.reason?.startsWith("Пользователь заблокировал бота")) {
+        setNotice(result.skipped[0].reason);
+        await load(active);
+        return;
+      }
       if (!result.sent.length)
         throw new Error(
           result.skipped[0]?.reason || "Не удалось отправить приглашение",

@@ -37,10 +37,12 @@ export function createInvitationService({ db, bot }) {
       // A pending invitation means that a person actually received a button to
       // answer.  Keep failed deliveries separate so the organiser can retry
       // them instead of mistaking Telegram's error for a guest's silence.
-      db.prepare("UPDATE invitations SET status='delivery_failed' WHERE id=?").run(invitation.id);
-      updateInviteAttempt(invitation.id, 'delivery_failed');
+      const blocked = /bot was blocked by the user/i.test(error.description || error.message || '');
+      const status = blocked ? 'bot_blocked' : 'delivery_failed';
+      db.prepare('UPDATE invitations SET status=? WHERE id=?').run(status, invitation.id);
+      updateInviteAttempt(invitation.id, status);
       db.prepare("UPDATE applicants SET status='awaiting_review' WHERE id=?").run(applicantId);
-      throw new Error(`Telegram не доставил приглашение: ${error.message}`);
+      throw new Error(blocked ? 'Пользователь заблокировал бота. Приглашение не доставлено. Повторите после разблокировки.' : `Telegram не доставил приглашение: ${error.message}`);
     }
   }
 

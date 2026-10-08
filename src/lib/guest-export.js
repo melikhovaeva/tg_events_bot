@@ -17,7 +17,7 @@ export async function guestWorkbook(event, people) {
   for (const person of people) sheet.addRow({
     name: person.name || '', phone: String(person.phone || ''), telegram: person.telegram_name ? `@${person.telegram_name}` : '',
     student: person.was_school_student == null ? 'Не указано' : person.was_school_student ? 'Да' : 'Нет',
-    status: person.checked_in_at ? 'Пришёл' : person.invitation_status === 'confirmed' && person.final_confirmed_at ? 'Участие подтверждено' : person.invitation_status === 'confirmed' && person.reminder_sent_at ? 'Ждём финального ответа' : statuses[person.invitation_status || person.status] || 'Не указан',
+    status: person.checked_in_at ? 'Пришёл' : person.invitation_status === 'bot_blocked' ? 'Бот заблокирован пользователем' : person.invitation_status === 'confirmed' && person.final_confirmed_at ? 'Участие подтверждено' : person.invitation_status === 'confirmed' && person.reminder_sent_at ? 'Ждём финального ответа' : statuses[person.invitation_status || person.status] || 'Не указан',
     attended: person.checked_in_at ? 'Да' : 'Нет', created: date(person.created_at),
   });
   sheet.getColumn('phone').numFmt = '@';
