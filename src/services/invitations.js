@@ -29,7 +29,7 @@ export function createInvitationService({ db, bot }) {
     else invitation = { id: db.prepare("INSERT INTO invitations (applicant_id,status,expires_at) VALUES (?, 'pending', ?)").run(applicantId, expiresAt).lastInsertRowid };
     db.prepare("INSERT INTO invitation_attempts (applicant_id,invitation_id,status,sent_at,expires_at) VALUES (?,?,'pending',?,?)").run(applicantId, invitation.id, nowIso(), expiresAt);
     db.prepare("UPDATE applicants SET status='invited' WHERE id=?").run(applicantId);
-    const keyboard = new InlineKeyboard().text('Подтверждаю участие', `answer:yes:${invitation.id}`).style('success').text('Не смогу прийти', `answer:no:${invitation.id}`).style('danger');
+    const keyboard = new InlineKeyboard().text('Подтверждаю участие', `answer:yes:${invitation.id}`).style('primary').text('Не смогу прийти', `answer:no:${invitation.id}`).style('danger');
     try {
       const images = db.prepare('SELECT * FROM event_message_images WHERE event_id=? AND message_key=? ORDER BY position').all(row.event_id, 'invite');
       await sendMediaMessage(bot.api, row.telegram_id, eventText(row, 'invite'), images, keyboard);
@@ -60,7 +60,7 @@ export function createInvitationService({ db, bot }) {
     const upcoming = db.prepare(`SELECT i.*, a.telegram_id, e.id AS event_id, e.title, e.starts_at, e.reminder_text FROM invitations i JOIN applicants a ON a.id=i.applicant_id JOIN events e ON e.id=a.event_id WHERE i.status='confirmed' AND i.final_confirmed_at IS NULL AND i.reminder_sent_at IS NULL AND e.starts_at BETWEEN ? AND ?`).all(nowIso(), new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString());
     for (const row of upcoming) {
       if (row.telegram_id) {
-        const keyboard = new InlineKeyboard().text('Буду', `final:yes:${row.id}`).style('success').text('Не смогу прийти', `final:no:${row.id}`).style('danger');
+        const keyboard = new InlineKeyboard().text('Буду', `final:yes:${row.id}`).style('primary').text('Не смогу прийти', `final:no:${row.id}`).style('danger');
         const images = db.prepare('SELECT * FROM event_message_images WHERE event_id=? AND message_key=? ORDER BY position').all(row.event_id, 'reminder');
         await sendMediaMessage(bot.api, row.telegram_id, eventText(row, 'reminder'), images, keyboard);
         await sendAssets(row.telegram_id, row.event_id, 'reminder');

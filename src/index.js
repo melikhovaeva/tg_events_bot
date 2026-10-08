@@ -398,7 +398,7 @@ async function continueStart(ctx, claim) {
     const details = [event.registration_text || event.description, event.registration_open ? 'Регистрация открыта' : 'Регистрация закрыта'].filter(Boolean).join('\n\n');
     const existing = db.prepare('SELECT status FROM applicants WHERE event_id=? AND telegram_id=?').get(event.id, String(ctx.from.id));
     if (existing && existing.status !== 'cancelled') return ctx.reply(`Вы уже подали заявку на «${event.title}». Сейчас: ${userStatus[existing.status] || existing.status}.`, { reply_markup: mainKeyboard() });
-    const keyboard = event.registration_open ? new InlineKeyboard().text('Подать заявку', `apply:${event.id}`).style('success') : undefined;
+    const keyboard = event.registration_open ? new InlineKeyboard().text('Подать заявку', `apply:${event.id}`).style('primary') : undefined;
     const images = db.prepare('SELECT * FROM event_images WHERE event_id=? ORDER BY position').all(event.id);
     const cardText = `«${esc(event.title)}»\n\n${telegramHtml(details)}`;
     const options = messageOptions(keyboard ? { reply_markup: keyboard } : undefined);
@@ -431,7 +431,7 @@ async function requestConsent(ctx, claim) {
     .row()
     .url('Согласие на обработку данных', agreementUrl)
     .row()
-    .text('Согласиться и продолжить', `consent:${continuation}`).style('success');
+    .text('Согласиться и продолжить', `consent:${continuation}`).style('primary');
   return ctx.reply('Привет! Это Perasperadastra ✱\n\nПеред тем как перейти к событию, давайте договоримся о важном: мы бережно храним ваши данные и используем их только для регистрации и связи по мероприятию.\n\nПожалуйста, ознакомьтесь с документами ниже. Нажимая «Согласиться и продолжить», вы даёте согласие на обработку персональных данных.', { reply_markup: keyboard });
 }
 bot.command('start', async ctx => {
