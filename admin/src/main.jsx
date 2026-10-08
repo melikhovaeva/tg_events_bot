@@ -2202,13 +2202,24 @@ function TeamSettings({ currentUser, users, events, auditLog, auditHasMore, onCh
   );
 }
 
-function guestStatus(person) {
+function guestStatusLabel(person) {
   if (person.blocked) return "Доступ ограничен";
   if (person.checked_in_at) return "Пришёл";
   if (person.invitation_status === "confirmed" && person.reminder_sent_at && !person.final_confirmed_at) return "Ждём финального ответа";
   if (person.invitation_status === "confirmed" && person.final_confirmed_at) return "Участие подтверждено";
   if (person.invitation_status === "confirmed") return "Первично подтвердил";
   return statusNames[person.invitation_status || person.status] || "—";
+}
+function guestStatus(person) {
+  const status = person.invitation_status || person.status;
+  const tone = person.blocked ? "error"
+    : person.checked_in_at ? "attended"
+    : status === "confirmed" ? (person.reminder_sent_at && !person.final_confirmed_at ? "waiting" : "success")
+    : ["pending", "invited", "expired", "final_expired"].includes(status) ? "waiting"
+    : status === "delivery_failed" || status === "rejected" ? "error"
+    : ["declined", "cancelled"].includes(status) ? "inactive"
+    : "new";
+  return <span className={`guest-status guest-status--${tone}`}>{guestStatusLabel(person)}</span>;
 }
 
 function GuestCards({ people, assistant = false, hideSearch = false, onInvite, invitingIds = [], onReject, onBlock, onRemove }) {
@@ -2887,24 +2898,7 @@ function App() {
                           {p.telegram_name ? `@${p.telegram_name}` : "—"}
                         </td>
                         <td className="py-3">
-                          <span>
-                            {p.blocked
-                              ? "Доступ ограничен"
-                              : p.checked_in_at
-                                ? "Пришёл"
-                                : p.invitation_status === "confirmed" &&
-                                    p.reminder_sent_at &&
-                                    !p.final_confirmed_at
-                                  ? "Ждём финального ответа"
-                                  : p.invitation_status === "confirmed" &&
-                                      p.final_confirmed_at
-                                    ? "Участие подтверждено"
-                                    : p.invitation_status === "confirmed"
-                                      ? "Первично подтвердил"
-                                      : statusNames[
-                                          p.invitation_status || p.status
-                                        ]}
-                          </span>
+                          {guestStatus(p)}
                           {!p.blocked &&
                             p.invitation_status === "pending" &&
                             p.previous_invitation_status && (

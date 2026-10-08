@@ -1,4 +1,20 @@
 @tailwind base;@tailwind components;@tailwind utilities;
+/* Semantic status tones shared by the event table and guest cards. */
+:root {
+  --status-new-bg: 214 100% 97%; --status-new-text: 224 64% 33%;
+  --status-waiting-bg: 48 100% 96%; --status-waiting-text: 28 73% 26%;
+  --status-success-bg: 152 81% 96%; --status-success-text: 163 94% 24%;
+  --status-attended-bg: 270 100% 98%; --status-attended-text: 274 66% 32%;
+  --status-error-bg: 0 86% 97%; --status-error-text: 0 74% 35%;
+  --status-inactive-bg: 240 5% 96%; --status-inactive-text: 240 5% 34%;
+}
+.guest-status { display: inline-flex; align-items: center; border-radius: 999px; padding: 4px 10px; font-size: 12px; font-weight: 600; line-height: 1.5; background: hsl(var(--status-bg)); color: hsl(var(--status-text)); }
+.guest-status--new { --status-bg: var(--status-new-bg); --status-text: var(--status-new-text); }
+.guest-status--waiting { --status-bg: var(--status-waiting-bg); --status-text: var(--status-waiting-text); }
+.guest-status--success { --status-bg: var(--status-success-bg); --status-text: var(--status-success-text); }
+.guest-status--attended { --status-bg: var(--status-attended-bg); --status-text: var(--status-attended-text); }
+.guest-status--error { --status-bg: var(--status-error-bg); --status-text: var(--status-error-text); }
+.guest-status--inactive { --status-bg: var(--status-inactive-bg); --status-text: var(--status-inactive-text); }
 @layer base{:root{--background:0 0% 100%;--foreground:240 10% 3.9%;--card:0 0% 100%;--card-foreground:240 10% 3.9%;--primary:240 5.9% 10%;--primary-foreground:0 0% 98%;--secondary:240 4.8% 95.9%;--muted:240 4.8% 95.9%;--muted-foreground:240 3.8% 46.1%;--accent:240 4.8% 95.9%;--accent-foreground:240 5.9% 10%;--destructive:0 84.2% 60.2%;--input:240 5.9% 90%;--ring:240 5.9% 10%;--radius:.625rem}*{@apply border-border}body{@apply bg-background text-foreground;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}}
 
 /* Шапка: знак бренда слева, навигация по центру, действие справа. */
