@@ -398,7 +398,7 @@ async function continueStart(ctx, claim) {
     const details = [event.registration_text || event.description, event.registration_open ? 'Регистрация открыта' : 'Регистрация закрыта'].filter(Boolean).join('\n\n');
     const existing = db.prepare('SELECT status FROM applicants WHERE event_id=? AND telegram_id=?').get(event.id, String(ctx.from.id));
     if (existing && existing.status !== 'cancelled') return ctx.reply(`Вы уже подали заявку на «${event.title}». Сейчас: ${userStatus[existing.status] || existing.status}.`, { reply_markup: mainKeyboard() });
-    const keyboard = event.registration_open ? new InlineKeyboard().text('Подать заявку', `apply:${event.id}`) : undefined;
+    const keyboard = event.registration_open ? new InlineKeyboard().text('Подать заявку', `apply:${event.id}`).style('success') : undefined;
     const images = db.prepare('SELECT * FROM event_images WHERE event_id=? ORDER BY position').all(event.id);
     const cardText = `«${esc(event.title)}»\n\n${telegramHtml(details)}`;
     const options = messageOptions(keyboard ? { reply_markup: keyboard } : undefined);
@@ -431,7 +431,7 @@ async function requestConsent(ctx, claim) {
     .row()
     .url('Согласие на обработку данных', agreementUrl)
     .row()
-    .text('Согласиться и продолжить', `consent:${continuation}`);
+    .text('Согласиться и продолжить', `consent:${continuation}`).style('success');
   return ctx.reply('Привет! Это Perasperadastra ✱\n\nПеред тем как перейти к событию, давайте договоримся о важном: мы бережно храним ваши данные и используем их только для регистрации и связи по мероприятию.\n\nПожалуйста, ознакомьтесь с документами ниже. Нажимая «Согласиться и продолжить», вы даёте согласие на обработку персональных данных.', { reply_markup: keyboard });
 }
 bot.command('start', async ctx => {
@@ -581,7 +581,7 @@ async function showMyApplications(ctx) {
     const completedStatuses = new Set(['cancelled', 'declined', 'rejected', 'expired', 'final_expired']);
     const keyboard = completedStatuses.has(status) || completedStatuses.has(application.status)
       ? undefined
-      : new InlineKeyboard().text('Отменить регистрацию', `withdraw:${application.id}`);
+      : new InlineKeyboard().text('Отменить регистрацию', `withdraw:${application.id}`).style('danger');
     const announcement = application.registration_text || application.description;
     const text = [
       `<b>«${esc(application.title)}»</b>`,
@@ -643,7 +643,7 @@ bot.callbackQuery(/^answer:(yes|no):(\d+)$/, async ctx => {
     db.prepare("UPDATE invitations SET status='confirmed', responded_at=?, checkin_token=?, final_confirmed_at=? WHERE id=?").run(nowIso(), checkinToken, directCheckin ? nowIso() : null, id);
     updateInviteAttempt(id, 'confirmed', true);
     db.prepare("UPDATE applicants SET status='confirmed' WHERE id=?").run(row.applicant_id);
-    await ctx.editMessageText(directCheckin ? 'Участие подтверждено. QR-код для входа придёт следующим сообщением.' : eventText(row, 'confirmed'), messageOptions({ reply_markup: new InlineKeyboard().text('Не смогу прийти', `cancel:${id}`) })); await sendMessageImages(row.telegram_id, row.event_id, 'confirmed');
+    await ctx.editMessageText(directCheckin ? 'Участие подтверждено. QR-код для входа придёт следующим сообщением.' : eventText(row, 'confirmed'), messageOptions({ reply_markup: new InlineKeyboard().text('Не смогу прийти', `cancel:${id}`).style('danger') })); await sendMessageImages(row.telegram_id, row.event_id, 'confirmed');
     if (row.chat_url) await ctx.reply(`Пока можете присоединиться к чату мероприятия: ${row.chat_url}`);
     if (directCheckin) {
       const qr = await QRCode.toBuffer(checkinToken, { width: 900, margin: 4, errorCorrectionLevel: 'H' });
