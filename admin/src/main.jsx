@@ -2289,11 +2289,6 @@ function App() {
     load(initialEvent);
   }, []);
   useEffect(() => {
-    if (page !== "detail" || !active) return undefined;
-    const refresh = window.setInterval(() => load(active), 20_000);
-    return () => window.clearInterval(refresh);
-  }, [page, active]);
-  useEffect(() => {
     if (
       checkedStartEvent.current ||
       initialPage !== "events" ||
@@ -2349,6 +2344,60 @@ function App() {
       setError(e.message);
     }
   };
+  const liveRefresh = useRef(null);
+  liveRefresh.current = async () => {
+    // Preserve unsaved editor state; list pages refresh without remounting forms.
+    if (["eventEditor", "textEditor", "postEditor"].includes(page) || open) return;
+    await load(active);
+    if (page === "dialogs" && activeDialog) await loadDialog(activeDialog);
+  };
+  useEffect(() => {
+    let socket;
+    let disposed = false;
+    let reconnect;
+    let debounce;
+    let refreshing = false;
+    let pending = false;
+    let retryDelay = 1000;
+    const refresh = async () => {
+      if (disposed) return;
+      if (refreshing) { pending = true; return; }
+      refreshing = true;
+      try { await liveRefresh.current?.(); }
+      finally {
+        refreshing = false;
+        if (pending) { pending = false; scheduleRefresh(); }
+      }
+    };
+    const scheduleRefresh = () => {
+      window.clearTimeout(debounce);
+      debounce = window.setTimeout(refresh, 200);
+    };
+    const connect = () => {
+      if (disposed) return;
+      socket = new WebSocket(`${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/api/admin/live`);
+      socket.onopen = () => { retryDelay = 1000; scheduleRefresh(); };
+      socket.onmessage = (event) => {
+        try { if (JSON.parse(event.data).type === "refresh") scheduleRefresh(); } catch { /* Ignore unknown messages. */ }
+      };
+      socket.onclose = (event) => {
+        if (disposed || event.code === 1008) return;
+        reconnect = window.setTimeout(connect, retryDelay);
+        retryDelay = Math.min(retryDelay * 2, 30000);
+      };
+      socket.onerror = () => socket.close();
+    };
+    const onVisible = () => { if (document.visibilityState === "visible") scheduleRefresh(); };
+    connect();
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      disposed = true;
+      window.clearTimeout(reconnect);
+      window.clearTimeout(debounce);
+      document.removeEventListener("visibilitychange", onVisible);
+      socket?.close();
+    };
+  }, []);
   useEffect(() => {
     if (initialPage === "dialogs" && initialDialog) loadDialog(initialDialog);
   }, []);

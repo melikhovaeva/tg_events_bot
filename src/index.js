@@ -13,6 +13,7 @@ import { loginPage } from './lib/login-page.js';
 import { backupsDir, dbPath, ensureDataDirectories, uploadsDir } from './lib/paths.js';
 import { defaultText, esc, eventText, messageOptions, nowIso, richTextHtml, telegramHtml, token } from './lib/text.js';
 import { createInvitationService } from './services/invitations.js';
+import { WebSocketServer, WebSocket } from 'ws';
 import { sendMediaMessage } from './services/media-message.js';
 import { parseEventTime } from './lib/event-time.js';
 import { guestWorkbook } from './lib/guest-export.js';
@@ -196,7 +197,7 @@ function ensureConversationsForBotUsers() {
     if (!known || user.joined_at > known.joined_at || (!known.telegram_name && user.telegram_name)) knownUsers.set(user.telegram_id, user);
   }
   const add = db.prepare('INSERT OR IGNORE INTO conversations (telegram_id,telegram_name,last_message,last_message_at,unread_count) VALUES (?,?,?,?,0)');
-  const addName = db.prepare('UPDATE conversations SET telegram_name=COALESCE(telegram_name, ?) WHERE telegram_id=?');
+  const addName = db.prepare('UPDATE conversations SET telegram_name=? WHERE telegram_id=? AND telegram_name IS NULL');
   db.transaction(() => {
     knownUsers.forEach((user) => {
       add.run(user.telegram_id, user.telegram_name || null, '', user.joined_at || nowIso());
@@ -294,7 +295,7 @@ const adminOnly = (req, res, next) => {
       return res.status(403).json({ error: 'Помощнику доступны только список гостей и чек-ин назначенного мероприятия' });
     }
     const sessionId = readCookie(req, 'event_ops_session');
-    db.prepare('UPDATE admin_sessions SET expires_at=? WHERE id=?').run(Date.now() + sessionDurationMs, sessionId);
+    db.prepare('UPDATE admin_sessions SET expires_at=? WHERE id=? AND expires_at<?').run(Date.now() + sessionDurationMs, sessionId, Date.now() + sessionDurationMs - 60000);
     res.set('Set-Cookie', sessionCookie(sessionId));
     if (req.method !== 'GET' && req.method !== 'HEAD') {
       res.once('finish', () => {
@@ -962,7 +963,7 @@ app.delete('/api/admin/events/:id', adminOnly, (req, res) => {
 app.get('/api/admin/dialogs/:telegramId', adminOnly, (req, res) => {
   const conversation = db.prepare('SELECT * FROM conversations WHERE telegram_id=?').get(req.params.telegramId);
   if (!conversation) return res.sendStatus(404);
-  db.prepare('UPDATE conversations SET unread_count=0 WHERE telegram_id=?').run(conversation.telegram_id);
+  db.prepare('UPDATE conversations SET unread_count=0 WHERE telegram_id=? AND unread_count>0').run(conversation.telegram_id);
   const messages = db.prepare('SELECT * FROM conversation_messages WHERE telegram_id=? ORDER BY id').all(conversation.telegram_id);
   res.json({ conversation: { ...conversation, unread_count: 0 }, messages });
 });
@@ -1223,6 +1224,42 @@ function layout(title, body) { return `<!doctype html><html lang="ru"><meta char
 
 const port = Number(process.env.PORT || 3000);
 const server = app.listen(port, () => console.log(`Admin: http://localhost:${port}/admin`));
+const realtime = new WebSocketServer({ noServer: true });
+server.on('upgrade', (req, socket, head) => {
+  if (req.url !== '/api/admin/live') return socket.destroy();
+  let origin;
+  try { origin = new URL(req.headers.origin || ''); } catch { return socket.destroy(); }
+  if (origin.host !== req.headers.host || !currentAdmin(req)) return socket.destroy();
+  realtime.handleUpgrade(req, socket, head, (client) => {
+    client.sessionRequest = req;
+    client.alive = true;
+    client.on('pong', () => { client.alive = true; });
+    client.on('error', () => client.terminate());
+    realtime.emit('connection', client, req);
+    client.send(JSON.stringify({ type: 'refresh' }));
+  });
+});
+// Observe committed database changes, including Telegram handlers and automation.
+// Send only an invalidation: the normal state API enforces each user's permissions.
+let lastDatabaseChange = db.prepare('SELECT total_changes() AS n').get().n;
+const liveChanges = setInterval(() => {
+  const change = db.prepare('SELECT total_changes() AS n').get().n;
+  if (change === lastDatabaseChange) return;
+  lastDatabaseChange = change;
+  for (const client of realtime.clients) {
+    if (!currentAdmin(client.sessionRequest)) { client.close(1008, 'Session expired'); continue; }
+    if (client.readyState === WebSocket.OPEN) client.send(JSON.stringify({ type: 'refresh' }));
+  }
+}, 1000);
+liveChanges.unref();
+const liveHeartbeat = setInterval(() => {
+  for (const client of realtime.clients) {
+    if (!client.alive || !currentAdmin(client.sessionRequest)) { client.terminate(); continue; }
+    client.alive = false;
+    client.ping();
+  }
+}, 30000);
+liveHeartbeat.unref();
 
 async function runDailyBackup() {
   try {
@@ -1264,6 +1301,10 @@ if (botEnabled) {
 
 function shutdown(signal) {
   console.log(`${signal}: завершаем работу…`);
+  clearInterval(liveChanges);
+  clearInterval(liveHeartbeat);
+  for (const client of realtime.clients) client.terminate();
+  realtime.close();
   bot.stop();
   server.close(() => {
     db.close();
