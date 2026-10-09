@@ -150,6 +150,7 @@ for (const [table, column, definition] of [
   ['admin_users', 'event_id', 'INTEGER REFERENCES events(id)'],
   ['admin_audit_log', 'action', 'TEXT'],
   ['admin_audit_log', 'details', 'TEXT'],
+  ['conversations', 'support_unread_count', 'INTEGER NOT NULL DEFAULT 0'],
 ]) {
   try { db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`); } catch { /* already exists */ }
 }
@@ -175,13 +176,14 @@ const userStatus = {
   declined: 'участие отменено', rejected: 'организатор пока не может пригласить вас', expired: 'ответ не получен',
   final_expired: 'финальное подтверждение не получено', cancelled: 'регистрация отменена',
 };
-function recordConversationMessage(telegramId, telegramName, direction, text) {
+function recordConversationMessage(telegramId, telegramName, direction, text, support = false) {
   const createdAt = nowIso();
   db.prepare('INSERT INTO conversation_messages (telegram_id,direction,text,created_at) VALUES (?,?,?,?)').run(telegramId, direction, text, createdAt);
   const unreadCount = direction === 'in' ? 1 : 0;
   db.prepare(`INSERT INTO conversations (telegram_id,telegram_name,last_message,last_message_at,unread_count) VALUES (?,?,?,?,?)
     ON CONFLICT(telegram_id) DO UPDATE SET telegram_name=COALESCE(excluded.telegram_name, conversations.telegram_name),last_message=excluded.last_message,last_message_at=excluded.last_message_at,unread_count=${direction === 'in' ? 'conversations.unread_count+1' : 'conversations.unread_count'}`)
     .run(telegramId, telegramName || null, text, createdAt, unreadCount);
+  if (support && direction === 'in') db.prepare('UPDATE conversations SET support_unread_count=support_unread_count+1 WHERE telegram_id=?').run(telegramId);
 }
 function ensureConversationsForBotUsers() {
   const users = db.prepare(`
@@ -371,7 +373,9 @@ bot.use(async (ctx, next) => {
   const message = ctx.message;
   if (telegramId && message) {
     const text = message.text || message.caption || (message.contact ? '📱 Отправил номер телефона' : message.photo ? '🖼 Отправил изображение' : message.document ? '📎 Отправил файл' : null);
-    if (text) recordConversationMessage(telegramId, ctx.from?.username || null, 'in', text);
+    const support = Boolean(db.prepare('SELECT 1 FROM support_drafts WHERE telegram_id=?').get(telegramId))
+      && !['Написать организатору', 'Мероприятия', 'Мои регистрации'].includes(text) && !text?.startsWith('/');
+    if (text) recordConversationMessage(telegramId, ctx.from?.username || null, 'in', text, support);
   }
   return next();
 });
@@ -964,7 +968,7 @@ app.delete('/api/admin/events/:id', adminOnly, (req, res) => {
 app.get('/api/admin/dialogs/:telegramId', adminOnly, (req, res) => {
   const conversation = db.prepare('SELECT * FROM conversations WHERE telegram_id=?').get(req.params.telegramId);
   if (!conversation) return res.sendStatus(404);
-  db.prepare('UPDATE conversations SET unread_count=0 WHERE telegram_id=? AND unread_count>0').run(conversation.telegram_id);
+  db.prepare('UPDATE conversations SET unread_count=0,support_unread_count=0 WHERE telegram_id=? AND (unread_count>0 OR support_unread_count>0)').run(conversation.telegram_id);
   const messages = db.prepare('SELECT * FROM conversation_messages WHERE telegram_id=? ORDER BY id').all(conversation.telegram_id);
   res.json({ conversation: { ...conversation, unread_count: 0 }, messages });
 });

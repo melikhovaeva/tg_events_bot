@@ -1755,7 +1755,7 @@ function Dialogs({
                   <button
                     key={item.telegram_id}
                     onClick={() => onOpen(item.telegram_id)}
-                    className={`w-full rounded-md border px-3 py-3 text-left ${count(item.unread_count) > 0 ? "border-red-200 bg-red-50 hover:bg-red-100" : activeId === item.telegram_id ? "border-transparent bg-accent" : "border-transparent hover:bg-muted"}`}
+                    className={`w-full rounded-md border px-3 py-3 text-left ${count(item.support_unread_count) > 0 ? "border-red-200 bg-red-50 hover:bg-red-100" : count(item.unread_count) > 0 ? "border-blue-200 bg-blue-50 hover:bg-blue-100" : activeId === item.telegram_id ? "border-transparent bg-accent" : "border-transparent hover:bg-muted"}`}
                   >
                     <div className="flex items-center justify-between gap-2">
                       <b className="truncate">
@@ -1764,12 +1764,12 @@ function Dialogs({
                           : `Telegram ${item.telegram_id}`}
                       </b>
                       {count(item.unread_count) > 0 && (
-                        <span aria-label={`Непрочитанных сообщений: ${item.unread_count}`} className="rounded-full bg-red-600 px-1.5 py-0.5 text-xs text-white">
+                        <span aria-label={`Непрочитанных сообщений: ${item.unread_count}`} className={`rounded-full px-1.5 py-0.5 text-xs text-white ${count(item.support_unread_count) > 0 ? "bg-red-600" : "bg-blue-600"}`}>
                           {item.unread_count}
                         </span>
                       )}
                     </div>
-                    <p className={`mt-1 truncate text-sm ${count(item.unread_count) > 0 ? "font-medium text-red-800" : "text-muted-foreground"}`}>
+                    <p className={`mt-1 truncate text-sm ${count(item.support_unread_count) > 0 ? "font-medium text-red-800" : count(item.unread_count) > 0 ? "font-medium text-blue-800" : "text-muted-foreground"}`}>
                       {plainText(item.last_message) || "Диалог ещё не начат"}
                     </p>
                     <p className="mt-1 text-xs text-muted-foreground">
