@@ -258,6 +258,7 @@ function auditFallback(method, path) {
   if (method === 'POST' && /\/api\/admin\/events\/\d+\/texts$/.test(path)) return 'Изменил тексты мероприятия';
   if (method === 'POST' && /\/api\/admin\/events\/\d+\/registration$/.test(path)) return 'Изменил регистрацию мероприятия';
   if (method === 'POST' && /\/api\/admin\/events\/\d+\/invitations$/.test(path)) return 'Отправил приглашения';
+  if (method === 'POST' && /\/api\/admin\/events\/\d+\/confirmations$/.test(path)) return 'Подтвердил участие вручную';
   if (method === 'POST' && /\/api\/admin\/posts$/.test(path)) return 'Создал пост';
   if (method === 'POST' && /\/api\/admin\/posts\/\d+$/.test(path)) return 'Изменил пост';
   if (method === 'POST' && /\/api\/admin\/posts\/\d+\/send$/.test(path)) return 'Отправил пост';
@@ -743,10 +744,10 @@ app.get('/api/admin/state', adminOnly, (req, res) => {
   const posts = req.adminUser.role === 'assistant' ? [] : db.prepare(`SELECT p.*, e.title AS event_title FROM posts p LEFT JOIN events e ON e.id=p.event_id ORDER BY p.updated_at DESC`).all();
   const postImages = req.adminUser.role === 'assistant' ? [] : db.prepare('SELECT id,post_id,original_name,position FROM post_images ORDER BY position').all();
   const postFiles = req.adminUser.role === 'assistant' ? [] : db.prepare('SELECT id,post_id,original_name FROM post_files ORDER BY created_at').all();
-  const conversations = req.adminUser.role === 'assistant' ? [] : db.prepare(`SELECT c.*, COALESCE(p.name, a.name) AS person_name
+  const conversations = req.adminUser.role === 'assistant' ? [] : db.prepare(`SELECT c.*, COALESCE(a.name, p.name) AS person_name
     FROM conversations c
     LEFT JOIN telegram_profiles p ON p.telegram_id=c.telegram_id
-    LEFT JOIN (SELECT telegram_id, MAX(name) AS name FROM applicants WHERE telegram_id IS NOT NULL GROUP BY telegram_id) a ON a.telegram_id=c.telegram_id
+    LEFT JOIN applicants a ON a.id=(SELECT recent.id FROM applicants recent WHERE recent.telegram_id=c.telegram_id ORDER BY recent.created_at DESC, recent.id DESC LIMIT 1)
     ORDER BY c.last_message_at DESC`).all();
   const postRecipients = req.adminUser.role === 'assistant' ? [] : db.prepare('SELECT post_id,telegram_id FROM post_recipients').all();
   const postSendSummaries = req.adminUser.role === 'assistant' ? [] : db.prepare(`SELECT s.* FROM post_sends s
@@ -938,6 +939,75 @@ app.post('/api/admin/events/:id/invitations', adminOnly, async (req, res) => {
   setAudit(req, 'Отправил приглашения', `Мероприятие #${event.id} · доставлено: ${sent.length}, не доставлено: ${skipped.length}`);
   res.json({ ok: true, sent, skipped });
 });
+app.post('/api/admin/events/:id/confirmations', adminOnly, (req, res) => {
+  const event = db.prepare('SELECT id,title FROM events WHERE id=?').get(req.params.id);
+  const ids = [...new Set((Array.isArray(req.body.applicantIds) ? req.body.applicantIds : []).map(Number).filter(Number.isInteger))];
+  if (!event) return res.sendStatus(404);
+  if (!ids.length) return res.status(400).json({ error: 'Выберите хотя бы одного гостя' });
+  if (ids.length > 500) return res.status(400).json({ error: 'За один раз можно подтвердить до 500 гостей' });
+
+  const findApplicant = db.prepare('SELECT id,name FROM applicants WHERE id=? AND event_id=?');
+  const findInvitation = db.prepare('SELECT id FROM invitations WHERE applicant_id=?');
+  const insertInvitation = db.prepare(`INSERT INTO invitations
+    (applicant_id,status,expires_at,responded_at,final_confirmed_at,checkin_token)
+    VALUES (?,'confirmed',?,?,?,?)`);
+  const confirmInvitation = db.prepare(`UPDATE invitations SET
+    status='confirmed', responded_at=COALESCE(responded_at, ?),
+    final_confirmed_at=?, final_expires_at=NULL,
+    checkin_token=COALESCE(checkin_token, ?)
+    WHERE applicant_id=?`);
+  const confirmApplicant = db.prepare("UPDATE applicants SET status='confirmed' WHERE id=?");
+  const confirmed = [];
+  const skipped = [];
+  const confirmedAt = nowIso();
+
+  db.transaction(() => {
+    for (const id of ids) {
+      const person = findApplicant.get(id, event.id);
+      if (!person) { skipped.push({ id, reason: 'заявка не найдена' }); continue; }
+      const invitation = findInvitation.get(person.id);
+      if (invitation) confirmInvitation.run(confirmedAt, confirmedAt, token(), person.id);
+      else insertInvitation.run(person.id, confirmedAt, confirmedAt, confirmedAt, token());
+      confirmApplicant.run(person.id);
+      confirmed.push({ id: person.id, name: person.name });
+    }
+  })();
+
+  setAudit(req, 'Подтвердил участие вручную', `${event.title} · гостей: ${confirmed.length}`);
+  res.json({ ok: true, confirmed, skipped });
+});
+app.post('/api/admin/events/:id/direct-invitations', adminOnly, async (req, res) => {
+  const event = db.prepare('SELECT * FROM events WHERE id=?').get(req.params.id);
+  if (!event) return res.sendStatus(404);
+  const ids = [...new Set((Array.isArray(req.body.applicantIds) ? req.body.applicantIds : []).map(Number).filter(Number.isInteger))];
+  if (!ids.length || ids.length > 500) return res.status(400).json({ error: 'Выберите от 1 до 500 гостей' });
+  const sent = [], skipped = [];
+  for (const id of ids) {
+    const person = db.prepare('SELECT * FROM applicants WHERE id=? AND event_id=?').get(id, event.id);
+    if (!person?.telegram_id) { skipped.push({ id, reason: 'Гость не подключил бота' }); continue; }
+    if (db.prepare('SELECT 1 FROM blocked_users WHERE telegram_id=?').get(person.telegram_id)) { skipped.push({ id, reason: 'Доступ ограничен' }); continue; }
+    const previous = db.prepare('SELECT * FROM invitations WHERE applicant_id=?').get(id);
+    if (previous?.final_confirmed_at && previous.status === 'confirmed') { skipped.push({ id, reason: 'Участие уже окончательно подтверждено' }); continue; }
+    const checkinToken = token();
+    try {
+      const qr = await QRCode.toBuffer(checkinToken, { width: 900, margin: 4, errorCorrectionLevel: 'H' });
+      const caption = `${eventText(event, 'final_confirmed').trim()}\n\nРезервный код: ${checkinToken.slice(0, 8).toUpperCase()}`;
+      if (caption.length <= 1024) await bot.api.sendPhoto(person.telegram_id, new InputFile(qr, 'checkin.png'), { caption, parse_mode: 'HTML' });
+      else { await bot.api.sendPhoto(person.telegram_id, new InputFile(qr, 'checkin.png')); await bot.api.sendMessage(person.telegram_id, caption, messageOptions()); }
+      const at = nowIso();
+      db.transaction(() => {
+        db.prepare(`INSERT INTO invitations (applicant_id,status,expires_at,responded_at,final_confirmed_at,checkin_token) VALUES (?,'confirmed',?,?,?,?)
+          ON CONFLICT(applicant_id) DO UPDATE SET status='confirmed',responded_at=excluded.responded_at,final_confirmed_at=excluded.final_confirmed_at,checkin_token=excluded.checkin_token,final_expires_at=NULL`)
+          .run(id, at, at, at, checkinToken);
+        db.prepare("UPDATE applicants SET status='confirmed' WHERE id=?").run(id);
+      })();
+      sent.push(id);
+      await sendMessageImages(person.telegram_id, event.id, 'final_confirmed');
+    } catch (error) { skipped.push({ id, reason: error.description || error.message }); }
+  }
+  setAudit(req, 'Пригласил без подтверждения', `${event.title} · отправлено QR: ${sent.length}, пропущено: ${skipped.length}`);
+  res.json({ ok: true, sent, skipped });
+});
 app.delete('/api/admin/events/:id', adminOnly, (req, res) => {
   const event = db.prepare('SELECT * FROM events WHERE id=?').get(req.params.id);
   if (!event) return res.sendStatus(404);
@@ -966,7 +1036,11 @@ app.delete('/api/admin/events/:id', adminOnly, (req, res) => {
   res.json({ ok: true });
 });
 app.get('/api/admin/dialogs/:telegramId', adminOnly, (req, res) => {
-  const conversation = db.prepare('SELECT * FROM conversations WHERE telegram_id=?').get(req.params.telegramId);
+  const conversation = db.prepare(`SELECT c.*, COALESCE(a.name, p.name) AS person_name
+    FROM conversations c
+    LEFT JOIN telegram_profiles p ON p.telegram_id=c.telegram_id
+    LEFT JOIN applicants a ON a.id=(SELECT recent.id FROM applicants recent WHERE recent.telegram_id=c.telegram_id ORDER BY recent.created_at DESC, recent.id DESC LIMIT 1)
+    WHERE c.telegram_id=?`).get(req.params.telegramId);
   if (!conversation) return res.sendStatus(404);
   db.prepare('UPDATE conversations SET unread_count=0,support_unread_count=0 WHERE telegram_id=? AND (unread_count>0 OR support_unread_count>0)').run(conversation.telegram_id);
   const messages = db.prepare('SELECT * FROM conversation_messages WHERE telegram_id=? ORDER BY id').all(conversation.telegram_id);

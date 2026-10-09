@@ -1759,9 +1759,9 @@ function Dialogs({
                   >
                     <div className="flex items-center justify-between gap-2">
                       <b className="truncate">
-                        {item.telegram_name
+                        {item.person_name || (item.telegram_name
                           ? `@${item.telegram_name}`
-                          : `Telegram ${item.telegram_id}`}
+                          : `Telegram ${item.telegram_id}`)}
                       </b>
                       {count(item.unread_count) > 0 && (
                         <span aria-label={`Непрочитанных сообщений: ${item.unread_count}`} className={`rounded-full px-1.5 py-0.5 text-xs text-white ${count(item.support_unread_count) > 0 ? "bg-red-600" : "bg-blue-600"}`}>
@@ -1769,6 +1769,13 @@ function Dialogs({
                         </span>
                       )}
                     </div>
+                    {item.person_name && (
+                      <p className="mt-0.5 truncate text-xs text-muted-foreground">
+                        {item.telegram_name
+                          ? `@${item.telegram_name}`
+                          : `Telegram ${item.telegram_id}`}
+                      </p>
+                    )}
                     <p className={`mt-1 truncate text-sm ${count(item.support_unread_count) > 0 ? "font-medium text-red-800" : count(item.unread_count) > 0 ? "font-medium text-blue-800" : "text-muted-foreground"}`}>
                       {plainText(item.last_message) || "Диалог ещё не начат"}
                     </p>
@@ -1796,10 +1803,17 @@ function Dialogs({
               <>
                 <div className="shrink-0 border-b px-5 py-3">
                   <b>
-                    {conversation.telegram_name
+                    {conversation.person_name || (conversation.telegram_name
                       ? `@${conversation.telegram_name}`
-                      : `Telegram ${conversation.telegram_id}`}
+                      : `Telegram ${conversation.telegram_id}`)}
                   </b>
+                  {conversation.person_name && (
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      {conversation.telegram_name
+                        ? `@${conversation.telegram_name}`
+                        : `Telegram ${conversation.telegram_id}`}
+                    </p>
+                  )}
                   <p className="mt-0.5 text-xs text-muted-foreground">
                     Ответ будет отправлен в личный чат с ботом.
                   </p>
@@ -2224,10 +2238,10 @@ function guestStatus(person) {
   return <span className={`guest-status guest-status--${tone}`}>{guestStatusLabel(person)}</span>;
 }
 
-function GuestCards({ people, assistant = false, hideSearch = false, onInvite, invitingIds = [], onReject, onBlock, onRemove }) {
+function GuestCards({ people, assistant = false, hideSearch = false, onInvite, invitingIds = [], onConfirmParticipation, onReject, onBlock, onRemove }) {
   const [query, setQuery] = useState("");
   const filtered = people.filter((person) => `${person.name || ""} ${person.telegram_name || ""}`.toLowerCase().includes(query.trim().toLowerCase()));
-  return <div className="md:hidden">{!hideSearch && <Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Найти по фамилии или @username" className="mb-3" />}<div className="grid gap-2">{filtered.map((person) => <div key={person.id} className="rounded-lg border bg-card p-4"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="font-semibold">{person.name}</p>{person.telegram_name && <p className="mt-0.5 text-sm text-muted-foreground">@{person.telegram_name}</p>}{!assistant && <p className="mt-0.5 text-sm text-muted-foreground">{person.phone}</p>}</div><span className="shrink-0 rounded-full bg-muted px-2 py-1 text-xs font-medium">{guestStatus(person)}</span></div>{!assistant && <div className="mt-3 flex flex-wrap gap-2">{person.telegram_id && !person.blocked && person.invitation_status !== "confirmed" && <Button size="sm" onClick={() => onInvite(person.id)} disabled={invitingIds.includes(person.id)}><Send size={14} />{invitingIds.includes(person.id) ? "Отправляем…" : "Пригласить"}</Button>}{person.telegram_id && !person.blocked && person.invitation_status !== "confirmed" && <Button variant="outline" size="sm" className="text-destructive hover:text-destructive" onClick={() => onReject(person)}><X size={14} />Отказать</Button>}{person.telegram_id && <Button variant="outline" size="sm" onClick={() => onBlock(person)}>{person.blocked ? "Вернуть доступ" : "Ограничить доступ"}</Button>}<Button variant="outline" size="sm" className="text-destructive hover:text-destructive" onClick={() => onRemove(person)}>Удалить</Button></div>}</div>)}{!filtered.length && <p className="rounded-lg border p-4 text-sm text-muted-foreground">Гость не найден.</p>}</div></div>;
+  return <div className="md:hidden">{!hideSearch && <Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Найти по фамилии или @username" className="mb-3" />}<div className="grid gap-2">{filtered.map((person) => <div key={person.id} className="rounded-lg border bg-card p-4"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="font-semibold">{person.name}</p>{person.telegram_name && <p className="mt-0.5 text-sm text-muted-foreground">@{person.telegram_name}</p>}{!assistant && <p className="mt-0.5 text-sm text-muted-foreground">{person.phone}</p>}</div><span className="shrink-0 rounded-full bg-muted px-2 py-1 text-xs font-medium">{guestStatus(person)}</span></div>{!assistant && <div className="mt-3 flex flex-wrap gap-2">{!person.final_confirmed_at && <Button variant="outline" size="sm" onClick={() => onConfirmParticipation(person)}><Check size={14} />Подтвердить 100%</Button>}{person.telegram_id && !person.blocked && person.invitation_status !== "confirmed" && <Button size="sm" onClick={() => onInvite(person.id)} disabled={invitingIds.includes(person.id)}><Send size={14} />{invitingIds.includes(person.id) ? "Отправляем…" : "Пригласить"}</Button>}{person.telegram_id && !person.blocked && person.invitation_status !== "confirmed" && <Button variant="outline" size="sm" className="text-destructive hover:text-destructive" onClick={() => onReject(person)}><X size={14} />Отказать</Button>}{person.telegram_id && <Button variant="outline" size="sm" onClick={() => onBlock(person)}>{person.blocked ? "Вернуть доступ" : "Ограничить доступ"}</Button>}<Button variant="outline" size="sm" className="text-destructive hover:text-destructive" onClick={() => onRemove(person)}>Удалить</Button></div>}</div>)}{!filtered.length && <p className="rounded-lg border p-4 text-sm text-muted-foreground">Гость не найден.</p>}</div></div>;
 }
 
 function AssistantEvent({ event, people, onCheckin }) {
@@ -2464,8 +2478,14 @@ function App() {
       !person.blocked &&
       person.invitation_status !== "confirmed",
   );
+  const manuallyConfirmableApplicants = filteredApplicants.filter(
+    (person) => !person.final_confirmed_at,
+  );
+  const selectedInvitationIds = selectedApplicants.filter((id) =>
+    eligibleApplicants.some((person) => person.id === id),
+  );
   useEffect(() => {
-    const eligibleIds = new Set(eligibleApplicants.map((person) => person.id));
+    const eligibleIds = new Set(manuallyConfirmableApplicants.map((person) => person.id));
     setSelectedApplicants((current) =>
       current.filter((id) => eligibleIds.has(id)),
     );
@@ -2477,7 +2497,7 @@ function App() {
         : [...current, id],
     );
   const toggleAllEligible = () => {
-    const ids = eligibleApplicants.map((person) => person.id);
+    const ids = manuallyConfirmableApplicants.map((person) => person.id);
     const everySelected =
       ids.length > 0 && ids.every((id) => selectedApplicants.includes(id));
     setSelectedApplicants(
@@ -2488,7 +2508,7 @@ function App() {
   };
   const bulkInvite = () =>
     setConfirm({
-      title: `Отправить приглашение ${selectedApplicants.length} гостям?`,
+      title: `Отправить приглашение ${selectedInvitationIds.length} гостям?`,
       description:
         "Каждый получит текст приглашения этого мероприятия и 24 часа на ответ. Для тех, кто уже ждёт ответа, приглашение будет отправлено повторно с новым сроком. Подтверждённые гости будут пропущены.",
       confirmLabel: "Отправить приглашения",
@@ -2498,7 +2518,7 @@ function App() {
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ applicantIds: selectedApplicants }),
+            body: JSON.stringify({ applicantIds: selectedInvitationIds }),
           },
         );
         const result = await response.json();
@@ -2509,6 +2529,41 @@ function App() {
         await load(event.id);
       },
     });
+  const directInvite = () => setConfirm({
+    title: `Подтвердить без ожидания: ${selectedApplicants.length} гостей?`,
+    description: "Гости сразу получат QR-код с текстом финального подтверждения и адресом. Повторно подтверждать участие не нужно; таймеры отказа не применяются.",
+    confirmLabel: "Подтвердить и отправить QR",
+    action: async () => {
+      const result = await (await request(`/api/admin/events/${event.id}/direct-invitations`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ applicantIds: selectedApplicants }),
+      })).json();
+      setBulkNotice(`Подтверждено, QR отправлен: ${result.sent.length}.${result.skipped.length ? ` Не отправлено: ${result.skipped.length}. ${result.skipped.map((item) => item.reason).join('; ')}` : ""}`);
+      setSelectedApplicants([]);
+      await load(event.id);
+    },
+  });
+  const confirmParticipation = (people) => {
+    const ids = people.map((person) => person.id);
+    const description = people.length === 1
+      ? `${people[0].name} будет отмечен(а) как окончательно подтвердивший(ая) участие.`
+      : `${people.length} гостей будут отмечены как окончательно подтвердившие участие.`;
+    setConfirm({
+      title: `Подтвердить участие на 100%?`,
+      description: `${description} Уведомление в Telegram не отправится.`,
+      confirmLabel: "Подтвердить 100%",
+      action: async () => {
+        const response = await request(`/api/admin/events/${event.id}/confirmations`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ applicantIds: ids }),
+        });
+        const result = await response.json();
+        setBulkNotice(`Участие подтверждено вручную: ${result.confirmed.length}.`);
+        setSelectedApplicants((current) => current.filter((id) => !ids.includes(id)));
+        await load(event.id);
+      },
+    });
+  };
   const sendPost = async (post) => {
     try {
       const preview = await (
@@ -2857,26 +2912,39 @@ function App() {
                       variant="outline"
                       size="sm"
                       onClick={toggleAllEligible}
-                      disabled={!eligibleApplicants.length}
+                      disabled={!manuallyConfirmableApplicants.length}
                     >
-                      {eligibleApplicants.length &&
-                      eligibleApplicants.every((person) =>
+                      {manuallyConfirmableApplicants.length &&
+                      manuallyConfirmableApplicants.every((person) =>
                         selectedApplicants.includes(person.id),
                       )
                         ? "Снять выбор"
-                        : "Выбрать доступных"}
+                        : "Выбрать неподтверждённых"}
                     </Button>
                     <Button
+                      variant="outline"
                       size="sm"
-                      onClick={bulkInvite}
+                      onClick={() => confirmParticipation(manuallyConfirmableApplicants.filter((person) => selectedApplicants.includes(person.id)))}
                       disabled={!selectedApplicants.length}
                     >
-                      <Send size={14} />
-                      Пригласить выбранных
+                      <Check size={14} />
+                      Подтвердить 100%
                       {selectedApplicants.length
                         ? ` (${selectedApplicants.length})`
                         : ""}
                     </Button>
+                    <Button
+                      size="sm"
+                      onClick={bulkInvite}
+                      disabled={!selectedInvitationIds.length}
+                    >
+                      <Send size={14} />
+                      Пригласить выбранных
+                      {selectedInvitationIds.length
+                        ? ` (${selectedInvitationIds.length})`
+                        : ""}
+                    </Button>
+                    {selectedApplicants.length > 0 && <Button variant="outline" size="sm" onClick={directInvite}><Check size={14} />Подтвердить без ожидания ({selectedApplicants.length})</Button>}
                   </div>
                 </div>
               </CardHeader>
@@ -2894,7 +2962,7 @@ function App() {
                   className="mb-3 max-w-md"
                 />
                 {applicantSearch && <p className="mb-3 text-sm text-muted-foreground">Найдено: {filteredApplicants.length} из {state.people.length}</p>}
-                <GuestCards people={filteredApplicants} hideSearch onInvite={invite} invitingIds={invitingIds} onReject={rejectApplicant} onBlock={toggleBlock} onRemove={removeApplicant} />
+                <GuestCards people={filteredApplicants} hideSearch onInvite={invite} invitingIds={invitingIds} onConfirmParticipation={(person) => confirmParticipation([person])} onReject={rejectApplicant} onBlock={toggleBlock} onRemove={removeApplicant} />
                 <div className="hidden overflow-x-auto md:block"><table className="w-full min-w-[620px] text-sm">
                   <thead>
                     <tr className="border-b text-left text-muted-foreground">
@@ -2902,15 +2970,15 @@ function App() {
                         <input
                           className="h-4 w-4 accent-foreground"
                           type="checkbox"
-                          aria-label="Выбрать всех доступных гостей"
+                          aria-label="Выбрать всех неподтверждённых гостей"
                           checked={
-                            eligibleApplicants.length > 0 &&
-                            eligibleApplicants.every((person) =>
+                            manuallyConfirmableApplicants.length > 0 &&
+                            manuallyConfirmableApplicants.every((person) =>
                               selectedApplicants.includes(person.id),
                             )
                           }
                           onChange={toggleAllEligible}
-                          disabled={!eligibleApplicants.length}
+                          disabled={!manuallyConfirmableApplicants.length}
                         />
                       </th>
                       <th className="pb-3">Участник</th>
@@ -2929,11 +2997,7 @@ function App() {
                             aria-label={`Выбрать ${p.name}`}
                             checked={selectedApplicants.includes(p.id)}
                             onChange={() => toggleApplicant(p.id)}
-                            disabled={
-                              !eligibleApplicants.some(
-                                (person) => person.id === p.id,
-                              )
-                            }
+                            disabled={!manuallyConfirmableApplicants.some((person) => person.id === p.id)}
                           />
                         </td>
                         <td className="py-3">
@@ -2969,6 +3033,18 @@ function App() {
                         </td>
                         <td className="py-3 text-right">
                           <div className="flex justify-end gap-1">
+                            {!p.final_confirmed_at && (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                title="Подтвердить участие на 100%"
+                                aria-label="Подтвердить участие на 100%"
+                                onClick={() => confirmParticipation([p])}
+                              >
+                                <Check size={14} />
+                                <span className="hidden lg:inline">100%</span>
+                              </Button>
+                            )}
                             {p.telegram_id &&
                               !p.blocked &&
                               p.invitation_status !== "confirmed" && (
