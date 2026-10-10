@@ -2479,7 +2479,7 @@ function App() {
       person.invitation_status !== "confirmed",
   );
   const manuallyConfirmableApplicants = filteredApplicants.filter(
-    (person) => !person.final_confirmed_at,
+    (person) => person.telegram_id && !person.blocked,
   );
   const selectedInvitationIds = selectedApplicants.filter((id) =>
     eligibleApplicants.some((person) => person.id === id),
@@ -2531,7 +2531,7 @@ function App() {
     });
   const directInvite = () => setConfirm({
     title: `Подтвердить 100% и отправить QR: ${selectedApplicants.length} гостей?`,
-    description: "Гости сразу получат QR-код с текстом финального подтверждения и адресом. Повторно подтверждать участие не нужно; таймеры отказа не применяются.",
+    description: "Гости сразу получат QR-код с текстом финального подтверждения и адресом. Уже подтверждённым гостям код отправится повторно, без сброса участия. Ранее выданный QR останется действительным. Повторно подтверждать участие не нужно; таймеры отказа не применяются.",
     confirmLabel: "Подтвердить 100% и отправить QR",
     action: async () => {
       const result = await (await request(`/api/admin/events/${event.id}/direct-invitations`, {
@@ -2897,7 +2897,7 @@ function App() {
                         selectedApplicants.includes(person.id),
                       )
                         ? "Снять выбор"
-                        : "Выбрать неподтверждённых"}
+                        : "Выбрать доступных"}
                     </Button>
                     <Button
                       size="sm"
@@ -2936,7 +2936,7 @@ function App() {
                         <input
                           className="h-4 w-4 accent-foreground"
                           type="checkbox"
-                          aria-label="Выбрать всех неподтверждённых гостей"
+                          aria-label="Выбрать всех доступных гостей"
                           checked={
                             manuallyConfirmableApplicants.length > 0 &&
                             manuallyConfirmableApplicants.every((person) =>

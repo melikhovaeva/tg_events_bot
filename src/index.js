@@ -987,8 +987,8 @@ app.post('/api/admin/events/:id/direct-invitations', adminOnly, async (req, res)
     if (!person?.telegram_id) { skipped.push({ id, reason: 'Гость не подключил бота' }); continue; }
     if (db.prepare('SELECT 1 FROM blocked_users WHERE telegram_id=?').get(person.telegram_id)) { skipped.push({ id, reason: 'Доступ ограничен' }); continue; }
     const previous = db.prepare('SELECT * FROM invitations WHERE applicant_id=?').get(id);
-    if (previous?.final_confirmed_at && previous.status === 'confirmed') { skipped.push({ id, reason: 'Участие уже окончательно подтверждено' }); continue; }
-    const checkinToken = token();
+    const alreadyConfirmed = previous?.final_confirmed_at && previous.status === 'confirmed';
+    const checkinToken = alreadyConfirmed && previous.checkin_token ? previous.checkin_token : token();
     try {
       const qr = await QRCode.toBuffer(checkinToken, { width: 900, margin: 4, errorCorrectionLevel: 'H' });
       const caption = `${eventText(event, 'final_confirmed').trim()}\n\nРезервный код: ${checkinToken.slice(0, 8).toUpperCase()}`;
@@ -998,7 +998,7 @@ app.post('/api/admin/events/:id/direct-invitations', adminOnly, async (req, res)
       db.transaction(() => {
         db.prepare(`INSERT INTO invitations (applicant_id,status,expires_at,responded_at,final_confirmed_at,checkin_token) VALUES (?,'confirmed',?,?,?,?)
           ON CONFLICT(applicant_id) DO UPDATE SET status='confirmed',responded_at=excluded.responded_at,final_confirmed_at=excluded.final_confirmed_at,checkin_token=excluded.checkin_token,final_expires_at=NULL`)
-          .run(id, at, at, at, checkinToken);
+          .run(id, at, at, alreadyConfirmed ? previous.final_confirmed_at : at, checkinToken);
         db.prepare("UPDATE applicants SET status='confirmed' WHERE id=?").run(id);
       })();
       sent.push(id);
