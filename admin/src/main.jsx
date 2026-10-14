@@ -2532,6 +2532,19 @@ function App() {
         await load(event.id);
       },
     });
+  const sendVenueUpdate = async () => {
+    const preview = await (await request(`/api/admin/events/${event.id}/venue-update`)).json();
+    setConfirm({
+      title: `Отправить обновление площадки ${preview.count} гостям?`,
+      description: 'Только первично подтвердившим, без 100%, отказов и уже получивших обновление. Новая площадка — Музей космонавтики. Кнопки: «Я приду и куплю билет» и «Не смогу прийти».',
+      confirmLabel: 'Отправить обновление',
+      action: async () => {
+        const result = await (await request(`/api/admin/events/${event.id}/venue-update`, { method: 'POST' })).json();
+        setBulkNotice(`Обновление площадки отправлено: ${result.sent.length}. Ошибок: ${result.failed.length}. ${result.failed.map(item => item.reason).join('; ')}`);
+        await load(event.id);
+      },
+    });
+  };
   const directInvite = () => setConfirm({
     title: `Подтвердить 100% и отправить QR: ${selectedApplicants.length} гостей?`,
     description: "Гости сразу получат QR-код с текстом финального подтверждения и адресом. Уже подтверждённым гостям код отправится повторно, без сброса участия. Ранее выданный QR останется действительным. Повторно подтверждать участие не нужно; таймеры отказа не применяются.",
@@ -2889,6 +2902,7 @@ function App() {
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <CardTitle>Заявки</CardTitle>
                   <div className="flex items-center gap-2">
+                    {event.id === 2 && <Button variant="outline" size="sm" onClick={sendVenueUpdate}>Смена площадки · первично подтвердившим</Button>}
                     <Button
                       variant="outline"
                       size="sm"

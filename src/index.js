@@ -18,6 +18,7 @@ import { sendMediaMessage } from './services/media-message.js';
 import { parseEventTime } from './lib/event-time.js';
 import { guestWorkbook } from './lib/guest-export.js';
 import { profileNameError } from './lib/profile-name.js';
+import { sendVenueUpdate, venueUpdateRecipients } from './services/venue-update.js';
 
 validateConfig();
 
@@ -661,6 +662,20 @@ bot.callbackQuery(/^preview:venue:(yes|no)$/, async ctx => {
   await ctx.editMessageReplyMarkup({ reply_markup: { inline_keyboard: [] } });
   await ctx.reply(yes ? 'Спасибо! Вы подтвердили участие на новой площадке — в Музее космонавтики. Для входа понадобится билет в музей.' : 'Спасибо, что предупредили. Ваше участие отменено.', messageOptions());
 });
+bot.callbackQuery(/^venue:(yes|no):(\d+)$/, async ctx => {
+  const row = db.prepare(`SELECT i.*, a.id applicant_id, a.telegram_id FROM invitations i
+    JOIN applicants a ON a.id=i.applicant_id WHERE i.id=?`).get(ctx.match[2]);
+  if (!row || row.telegram_id !== String(ctx.from.id) || !row.venue_update_sent) return ctx.answerCallbackQuery({ text: 'Приглашение не найдено.', show_alert: true });
+  if (row.venue_response !== 'pending' || row.status !== 'confirmed') return ctx.answerCallbackQuery({ text: 'Ответ уже сохранён или участие отменено.', show_alert: true });
+  const yes = ctx.match[1] === 'yes';
+  db.transaction(() => {
+    db.prepare('UPDATE invitations SET venue_response=?,status=?,responded_at=? WHERE id=?').run(yes ? 'confirmed' : 'declined', yes ? 'confirmed' : 'declined', nowIso(), row.id);
+    db.prepare('UPDATE applicants SET status=? WHERE id=?').run(yes ? 'confirmed' : 'declined', row.applicant_id);
+  })();
+  await ctx.answerCallbackQuery({ text: yes ? 'Новая площадка подтверждена' : 'Отказ сохранён' });
+  await ctx.editMessageReplyMarkup({ reply_markup: { inline_keyboard: [] } });
+  await ctx.reply(yes ? 'Спасибо! Вы подтвердили участие в Музее космонавтики. Для входа понадобится билет в музей. За сутки до лектория пришлём напоминание для финального подтверждения участия.' : 'Спасибо, что предупредили. Ваше участие отменено.', messageOptions());
+});
 bot.callbackQuery(/^answer:(yes|no):(\d+)$/, async ctx => {
   const [, answer, id] = ctx.match;
   const row = db.prepare(`SELECT i.*, a.telegram_id, a.name, e.id AS event_id, e.title, e.starts_at, e.chat_url, e.confirmed_text, e.declined_text
@@ -967,6 +982,21 @@ app.post('/api/admin/events/:id/invitations', adminOnly, async (req, res) => {
   }
   setAudit(req, 'Отправил приглашения', `Мероприятие #${event.id} · доставлено: ${sent.length}, не доставлено: ${skipped.length}`);
   res.json({ ok: true, sent, skipped });
+});
+app.get('/api/admin/events/:id/venue-update', adminOnly, (req, res) => {
+  if (Number(req.params.id) !== 2) return res.status(400).json({ error: 'Обновление относится только к лекторию 17.10' });
+  res.json({ count: venueUpdateRecipients(db, 2).length });
+});
+let venueSending = false;
+app.post('/api/admin/events/:id/venue-update', adminOnly, async (req, res) => {
+  if (Number(req.params.id) !== 2) return res.status(400).json({ error: 'Обновление относится только к лекторию 17.10' });
+  if (venueSending) return res.status(409).json({ error: 'Рассылка уже выполняется' });
+  venueSending = true;
+  try {
+    const result = await sendVenueUpdate(db, bot.api, 2);
+    setAudit(req, 'Отправил обновление площадки', `Первично подтвердившие · доставлено: ${result.sent.length}, ошибок: ${result.failed.length}`);
+    res.json(result);
+  } finally { venueSending = false; }
 });
 app.post('/api/admin/events/:id/confirmations', adminOnly, (req, res) => {
   const event = db.prepare('SELECT id,title FROM events WHERE id=?').get(req.params.id);

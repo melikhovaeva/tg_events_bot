@@ -17,7 +17,7 @@ function setup({ sendMessage = async () => ({ ok: true }) } = {}) {
     CREATE TABLE invitations (
       id INTEGER PRIMARY KEY, applicant_id INTEGER NOT NULL UNIQUE,
       status TEXT NOT NULL, expires_at TEXT NOT NULL, responded_at TEXT,
-      reminder_sent_at TEXT, final_expires_at TEXT, final_confirmed_at TEXT
+      reminder_sent_at TEXT, final_expires_at TEXT, final_confirmed_at TEXT, venue_response TEXT
     );
     CREATE TABLE invitation_attempts (
       id INTEGER PRIMARY KEY, applicant_id INTEGER NOT NULL, invitation_id INTEGER NOT NULL,
