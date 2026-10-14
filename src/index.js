@@ -140,6 +140,7 @@ for (const [table, column, definition] of [
   ['events', 'confirmed_text', 'TEXT'], ['events', 'declined_text', 'TEXT'], ['events', 'rejected_text', 'TEXT'], ['events', 'reminder_text', 'TEXT'],
   ['events', 'expired_text', 'TEXT'], ['invitations', 'final_confirmed_at', 'TEXT'], ['invitations', 'final_expires_at', 'TEXT'],
   ['events', 'final_confirmed_text', 'TEXT'], ['events', 'final_declined_text', 'TEXT'],
+  ['invitations', 'venue_response', 'TEXT'],
   ['events', 'cover_stored_name', 'TEXT'], ['events', 'cover_original_name', 'TEXT'],
   ['events', 'registration_open', 'INTEGER NOT NULL DEFAULT 1'],
   ['applicants', 'was_school_student', 'INTEGER'],
@@ -632,6 +633,22 @@ bot.callbackQuery(/^withdraw:(\d+)$/, async ctx => {
   return ctx.editMessageText('Регистрация отменена. Если планы изменятся, вы сможете снова подать заявку по ссылке на мероприятие.');
 });
 
+// The venue-change preview was sent only to the organiser. These callbacks
+// deliberately cannot be used by other guests or affect another event.
+bot.callbackQuery(/^preview:venue:(yes|no)$/, async ctx => {
+  if (String(ctx.from.id) !== '1626422277') return ctx.answerCallbackQuery({ text: 'Это тестовое сообщение организатора.', show_alert: true });
+  const row = db.prepare(`SELECT i.*, a.id applicant_id FROM invitations i
+    JOIN applicants a ON a.id=i.applicant_id WHERE a.event_id=2 AND a.telegram_id=?`).get(String(ctx.from.id));
+  if (!row || !['confirmed', 'declined'].includes(row.status) || (row.status === 'declined' && !row.venue_response)) return ctx.answerCallbackQuery({ text: 'Подтверждённая регистрация не найдена.', show_alert: true });
+  const yes = ctx.match[1] === 'yes';
+  db.transaction(() => {
+    db.prepare('UPDATE invitations SET venue_response=?,status=?,responded_at=? WHERE id=?').run(yes ? 'confirmed' : 'declined', yes ? 'confirmed' : 'declined', nowIso(), row.id);
+    db.prepare('UPDATE applicants SET status=? WHERE id=?').run(yes ? 'confirmed' : 'declined', row.applicant_id);
+  })();
+  await ctx.answerCallbackQuery({ text: yes ? 'Участие на новой площадке подтверждено' : 'Отказ сохранён' });
+  await ctx.editMessageReplyMarkup({ reply_markup: { inline_keyboard: [] } });
+  await ctx.reply(yes ? 'Спасибо! Вы подтвердили участие на новой площадке — в Музее космонавтики. Для входа понадобится билет в музей.' : 'Спасибо, что предупредили. Ваше участие отменено.', messageOptions());
+});
 bot.callbackQuery(/^answer:(yes|no):(\d+)$/, async ctx => {
   const [, answer, id] = ctx.match;
   const row = db.prepare(`SELECT i.*, a.telegram_id, a.name, e.id AS event_id, e.title, e.starts_at, e.chat_url, e.confirmed_text, e.declined_text
@@ -731,7 +748,7 @@ app.get('/api/admin/state', adminOnly, (req, res) => {
     GROUP BY e.id ORDER BY e.starts_at DESC`).all();
   const events = req.adminUser.role === 'assistant' ? allEvents.filter((event) => event.id === req.adminUser.event_id) : allEvents;
   const selected = req.adminUser.role === 'assistant' ? req.adminUser.event_id : Number(req.query.event || events[0]?.id);
-  const people = selected ? db.prepare(`SELECT a.*, i.id invitation_id, i.status invitation_status, i.expires_at, i.final_expires_at, i.final_confirmed_at, i.reminder_sent_at, i.checked_in_at,
+  const people = selected ? db.prepare(`SELECT a.*, i.id invitation_id, i.status invitation_status, i.venue_response, i.expires_at, i.final_expires_at, i.final_confirmed_at, i.reminder_sent_at, i.checked_in_at,
     EXISTS(SELECT 1 FROM blocked_users b WHERE b.telegram_id=a.telegram_id) AS blocked,
     (SELECT ia.status FROM invitation_attempts ia WHERE ia.applicant_id=a.id AND ia.status!='pending' ORDER BY ia.id DESC LIMIT 1) AS previous_invitation_status
     FROM applicants a LEFT JOIN invitations i ON i.applicant_id=a.id WHERE a.event_id=? ORDER BY a.created_at DESC`).all(selected) : [];
