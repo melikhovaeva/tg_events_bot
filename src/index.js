@@ -769,7 +769,8 @@ app.get('/', (_, res) => res.redirect('/admin'));
 app.get('/api/admin/state', adminOnly, (req, res) => {
   ensureConversationsForBotUsers();
   const allEvents = db.prepare(`SELECT e.*, COUNT(DISTINCT a.id) AS registered, COUNT(DISTINCT i.id) AS invited,
-    SUM(CASE WHEN i.status='confirmed' THEN 1 ELSE 0 END) AS confirmed,
+    SUM(CASE WHEN i.status='confirmed' AND COALESCE(i.venue_response,'') NOT IN ('pending','declined') THEN 1 ELSE 0 END) AS confirmed,
+    SUM(CASE WHEN i.status='confirmed' AND i.venue_response='confirmed' THEN 1 ELSE 0 END) AS venue_confirmed,
     SUM(CASE WHEN i.checked_in_at IS NOT NULL THEN 1 ELSE 0 END) AS checked_in
     FROM events e LEFT JOIN applicants a ON a.event_id=e.id LEFT JOIN invitations i ON i.applicant_id=a.id
     GROUP BY e.id ORDER BY e.starts_at DESC`).all();
