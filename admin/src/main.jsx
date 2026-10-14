@@ -2610,6 +2610,14 @@ function App() {
     window.setTimeout(() => setNotice(""), 5000);
     await load(event.id);
   };
+  const editApplicantName = async (person) => {
+    const name = window.prompt('ФИО участника', person.name);
+    if (!name || name.trim() === person.name) return;
+    await request(`/api/admin/applicants/${person.id}/name`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }),
+    });
+    await load(event.id);
+  };
   const removeApplicant = (person) =>
     setConfirm({
       title: "Удалить регистрацию?",
@@ -2985,6 +2993,7 @@ function App() {
                         </td>
                         <td className="py-3">
                           <b>{p.name}</b>
+                          <Button variant="ghost" size="sm" title={`Редактировать ФИО ${p.name}`} aria-label={`Редактировать ФИО ${p.name}`} onClick={() => editApplicantName(p)}><Pencil size={14} /></Button>
                           <br />
                           <span className="text-muted-foreground">
                             {p.phone}

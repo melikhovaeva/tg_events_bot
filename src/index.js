@@ -958,6 +958,20 @@ app.post('/api/admin/applicants/:id/reject', adminOnly, async (req, res) => {
   setAudit(req, 'Отказал в приглашении', `${person.name} · ${person.title}`);
   res.json({ ok: true });
 });
+app.patch('/api/admin/applicants/:id/name', adminOnly, (req, res) => {
+  const name = String(req.body.name || '').trim().replace(/\s+/g, ' ');
+  if (name.length > 200 || profileNameError(name)) return res.status(400).json({ error: 'Укажите корректное ФИО' });
+  const person = db.prepare('SELECT * FROM applicants WHERE id=?').get(req.params.id);
+  if (!person) return res.sendStatus(404);
+  db.transaction(() => {
+    if (person.telegram_id) {
+      db.prepare('UPDATE applicants SET name=? WHERE telegram_id=?').run(name, person.telegram_id);
+      db.prepare('UPDATE telegram_profiles SET name=?,updated_at=? WHERE telegram_id=?').run(name, nowIso(), person.telegram_id);
+    } else db.prepare('UPDATE applicants SET name=? WHERE id=?').run(name, person.id);
+  })();
+  setAudit(req, 'Исправил ФИО гостя', `${person.name} → ${name}`);
+  res.json({ ok: true });
+});
 app.post('/api/admin/events/:id/invitations', adminOnly, async (req, res) => {
   const event = db.prepare('SELECT id FROM events WHERE id=?').get(req.params.id);
   const ids = [...new Set((Array.isArray(req.body.applicantIds) ? req.body.applicantIds : []).map(Number).filter(Number.isInteger))];
