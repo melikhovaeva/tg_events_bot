@@ -1,4 +1,5 @@
 import path from 'node:path';
+import QRCode from 'qrcode';
 import { InlineKeyboard, InputFile } from 'grammy';
 import { uploadsDir } from '../lib/paths.js';
 import { eventText, messageOptions, nowIso, token } from '../lib/text.js';
@@ -46,6 +47,26 @@ export function createInvitationService({ db, bot }) {
     }
   }
 
+  async function sendReminder(applicantId) {
+    const row = db.prepare(`SELECT i.*, a.telegram_id, a.event_id FROM invitations i JOIN applicants a ON a.id=i.applicant_id WHERE a.id=?`).get(applicantId);
+    if (!row || !row.telegram_id || row.status !== 'confirmed' || row.venue_response === 'pending') throw new Error('Участие гостя не подтверждено');
+    if (db.prepare('SELECT 1 FROM blocked_users WHERE telegram_id=?').get(row.telegram_id)) throw new Error('Доступ гостя ограничен');
+    const event = db.prepare('SELECT * FROM events WHERE id=?').get(row.event_id);
+    const checkinToken = row.checkin_token || token();
+    const qr = await QRCode.toBuffer(checkinToken, { width: 900, margin: 4, errorCorrectionLevel: 'H' });
+    const keyboard = new InlineKeyboard().text('Отменить регистрацию', `cancel:${row.id}`).style('danger');
+    const images = db.prepare('SELECT * FROM event_message_images WHERE event_id=? AND message_key=? ORDER BY position').all(row.event_id, 'reminder');
+    await sendMediaMessage(bot.api, row.telegram_id, eventText(event, 'reminder'), images);
+    const caption = `${eventText(event, 'final_confirmed').trim()}\n\nРезервный код: ${checkinToken.slice(0, 8).toUpperCase()}`;
+    if (caption.length <= 1024) await bot.api.sendPhoto(row.telegram_id, new InputFile(qr, 'checkin.png'), messageOptions({ caption, reply_markup: keyboard }));
+    else {
+      await bot.api.sendPhoto(row.telegram_id, new InputFile(qr, 'checkin.png'));
+      await bot.api.sendMessage(row.telegram_id, caption, messageOptions({ reply_markup: keyboard }));
+    }
+    db.prepare('UPDATE invitations SET reminder_sent_at=?,final_confirmed_at=COALESCE(final_confirmed_at,?),final_expires_at=NULL,checkin_token=? WHERE id=?').run(nowIso(), nowIso(), checkinToken, row.id);
+    await sendAssets(row.telegram_id, row.event_id, 'reminder');
+  }
+
   async function runAutomation() {
     const expired = db.prepare("SELECT i.*, a.telegram_id, a.id applicant_id, e.id AS event_id, e.title, e.expired_text FROM invitations i JOIN applicants a ON a.id=i.applicant_id JOIN events e ON e.id=a.event_id WHERE i.status='pending' AND i.expires_at <= ?").all(nowIso());
     for (const row of expired) {
@@ -53,24 +74,11 @@ export function createInvitationService({ db, bot }) {
       updateInviteAttempt(row.id, 'expired'); db.prepare("UPDATE applicants SET status='expired' WHERE id=?").run(row.applicant_id);
       if (row.telegram_id) { await bot.api.sendMessage(row.telegram_id, eventText(row, 'expired'), messageOptions()).catch(console.error); await sendMessageImages(row.telegram_id, row.event_id, 'expired'); }
     }
-    const finalExpired = db.prepare("SELECT i.*, a.telegram_id, a.id applicant_id, e.id AS event_id, e.title, e.expired_text FROM invitations i JOIN applicants a ON a.id=i.applicant_id JOIN events e ON e.id=a.event_id WHERE i.status='confirmed' AND COALESCE(i.venue_response,'')!='pending' AND i.final_confirmed_at IS NULL AND i.final_expires_at <= ?").all(nowIso());
-    for (const row of finalExpired) {
-      db.prepare("UPDATE invitations SET status='final_expired' WHERE id=?").run(row.id);
-      db.prepare("UPDATE applicants SET status='final_expired' WHERE id=?").run(row.applicant_id);
-      if (row.telegram_id) await bot.api.sendMessage(row.telegram_id, eventText(row, 'expired'), messageOptions()).catch(console.error);
-    }
-    const upcoming = db.prepare(`SELECT i.*, a.telegram_id, e.id AS event_id, e.title, e.starts_at, e.reminder_text FROM invitations i JOIN applicants a ON a.id=i.applicant_id JOIN events e ON e.id=a.event_id WHERE i.status='confirmed' AND COALESCE(i.venue_response,'')!='pending' AND i.final_confirmed_at IS NULL AND i.reminder_sent_at IS NULL AND e.starts_at BETWEEN ? AND ?`).all(nowIso(), new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString());
+    const upcoming = db.prepare(`SELECT i.applicant_id FROM invitations i JOIN applicants a ON a.id=i.applicant_id JOIN events e ON e.id=a.event_id WHERE i.status='confirmed' AND COALESCE(i.venue_response,'')!='pending' AND i.reminder_sent_at IS NULL AND e.starts_at BETWEEN ? AND ?`).all(nowIso(), new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString());
     for (const row of upcoming) {
-      if (row.telegram_id) {
-        const keyboard = new InlineKeyboard().text('Буду', `final:yes:${row.id}`).style('primary').text('Не смогу прийти', `final:no:${row.id}`).style('danger');
-        const images = db.prepare('SELECT * FROM event_message_images WHERE event_id=? AND message_key=? ORDER BY position').all(row.event_id, 'reminder');
-        await sendMediaMessage(bot.api, row.telegram_id, eventText(row, 'reminder'), images, keyboard);
-        await sendAssets(row.telegram_id, row.event_id, 'reminder');
-      }
-      const finalExpiresAt = new Date(Math.min(Date.now() + 6 * 60 * 60 * 1000, new Date(row.starts_at).getTime())).toISOString();
-      db.prepare('UPDATE invitations SET reminder_sent_at=?,final_expires_at=? WHERE id=?').run(nowIso(), finalExpiresAt, row.id);
+      try { await sendReminder(row.applicant_id); } catch (error) { console.error('Reminder delivery failed', row.applicant_id, error.message); }
     }
   }
 
-  return { runAutomation, sendAssets, sendInvite, sendMessageImages, updateInviteAttempt };
+  return { sendReminder, runAutomation, sendAssets, sendInvite, sendMessageImages, updateInviteAttempt };
 }

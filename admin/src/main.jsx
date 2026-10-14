@@ -437,7 +437,7 @@ const textPosts = [
     key: "final_confirmed",
     field: "final_confirmed_text",
     title: "Финальное подтверждение · QR-код",
-    hint: "Подпись к QR после подтверждения за сутки или при позднем приглашении. Здесь можно указать адрес и инструкции для входа.",
+    hint: "Подпись к QR, который автоматически приходит за сутки без дополнительного подтверждения, или при позднем приглашении. Здесь можно указать адрес и инструкции для входа.",
     placeholder: "Ждём вас на «{event}»! Адрес: … Покажите QR-код организатору.",
   },
   {
@@ -2610,6 +2610,12 @@ function App() {
     window.setTimeout(() => setNotice(""), 5000);
     await load(event.id);
   };
+  const testReminder = () => setConfirm({
+    title: 'Отправить напоминание и QR выбранному гостю?',
+    description: 'Отправятся текущие тексты «Напоминание за сутки» и «Финальное подтверждение · QR-код» с кнопкой отмены регистрации.',
+    confirmLabel: 'Отправить',
+    action: async () => { await request(`/api/admin/applicants/${selectedApplicants[0]}/reminder`, { method: 'POST' }); await load(event.id); },
+  });
   const editApplicantName = async (person) => {
     const name = window.prompt('ФИО участника', person.name);
     if (!name || name.trim() === person.name) return;
@@ -2911,6 +2917,7 @@ function App() {
                   <CardTitle>Заявки</CardTitle>
                   <div className="flex items-center gap-2">
                     {event.id === 2 && <Button variant="outline" size="sm" onClick={sendVenueUpdate}>Смена площадки · первично подтвердившим</Button>}
+                    {selectedApplicants.length === 1 && <Button variant="outline" size="sm" onClick={testReminder}>Напоминание и QR</Button>}
                     <Button
                       variant="outline"
                       size="sm"

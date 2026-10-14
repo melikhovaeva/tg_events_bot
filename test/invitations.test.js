@@ -17,7 +17,7 @@ function setup({ sendMessage = async () => ({ ok: true }) } = {}) {
     CREATE TABLE invitations (
       id INTEGER PRIMARY KEY, applicant_id INTEGER NOT NULL UNIQUE,
       status TEXT NOT NULL, expires_at TEXT NOT NULL, responded_at TEXT,
-      reminder_sent_at TEXT, final_expires_at TEXT, final_confirmed_at TEXT, venue_response TEXT
+      reminder_sent_at TEXT, final_expires_at TEXT, final_confirmed_at TEXT, venue_response TEXT, checkin_token TEXT
     );
     CREATE TABLE invitation_attempts (
       id INTEGER PRIMARY KEY, applicant_id INTEGER NOT NULL, invitation_id INTEGER NOT NULL,
@@ -32,7 +32,7 @@ function setup({ sendMessage = async () => ({ ok: true }) } = {}) {
   db.prepare('INSERT INTO applicants (id,event_id,name,telegram_id,status) VALUES (1,1,?,?,?)')
     .run('Ева', '100', 'awaiting_review');
   const calls = [];
-  const bot = { api: { sendMessage: async (...args) => { calls.push(args); return sendMessage(...args); } } };
+  const bot = { api: { sendPhoto: async (...args) => { calls.push(args); return { ok: true }; }, sendMessage: async (...args) => { calls.push(args); return sendMessage(...args); } } };
   return { db, calls, service: createInvitationService({ db, bot }) };
 }
 
@@ -83,13 +83,23 @@ test('automation expires an unanswered initial invitation', async () => {
   assert.match(calls.at(-1)[1], /Время ответа закончилось/);
 });
 
-test('automation distinguishes a missed final confirmation from a voluntary refusal', async () => {
+test('automation no longer refuses guests for missing final confirmation', async () => {
   const { db, service } = setup();
   db.prepare("INSERT INTO invitations (id,applicant_id,status,expires_at,final_expires_at) VALUES (1,1,'confirmed',?,?)")
     .run(new Date(Date.now() + 60_000).toISOString(), new Date(Date.now() - 1_000).toISOString());
 
   await service.runAutomation();
 
-  assert.equal(db.prepare('SELECT status FROM invitations WHERE id=1').get().status, 'final_expired');
-  assert.equal(db.prepare('SELECT status FROM applicants WHERE id=1').get().status, 'final_expired');
+  assert.equal(db.prepare('SELECT status FROM invitations WHERE id=1').get().status, 'confirmed');
+});
+
+test('daily reminder sends QR and cancellation without another confirmation, only once', async () => {
+  const { db, calls, service } = setup();
+  db.prepare('UPDATE events SET starts_at=? WHERE id=1').run(new Date(Date.now()+3600000).toISOString());
+  db.prepare("INSERT INTO invitations(id,applicant_id,status,expires_at,checkin_token) VALUES(1,1,'confirmed',?,'existing-qr')").run(new Date().toISOString());
+  await service.runAutomation();
+  const row=db.prepare('SELECT * FROM invitations WHERE id=1').get();
+  assert.ok(row.final_confirmed_at); assert.ok(row.reminder_sent_at); assert.equal(row.checkin_token,'existing-qr'); assert.equal(row.final_expires_at,null);
+  assert.equal(calls.at(-1)[2].reply_markup.inline_keyboard[0][0].callback_data,'cancel:1');
+  const count=calls.length; await service.runAutomation(); assert.equal(calls.length,count);
 });

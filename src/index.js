@@ -345,7 +345,7 @@ bot.use(async (ctx, next) => {
   return next();
 });
 const botEnabled = Boolean(process.env.BOT_TOKEN) && process.env.BOT_ENABLED !== 'false';
-const { runAutomation, sendAssets, sendInvite, sendMessageImages, updateInviteAttempt } = createInvitationService({ db, bot });
+const { runAutomation, sendReminder, sendAssets, sendInvite, sendMessageImages, updateInviteAttempt } = createInvitationService({ db, bot });
 async function sendCheckinQr(ctx, row, checkinToken, qr) {
   const event = db.prepare('SELECT * FROM events WHERE id=?').get(row.event_id);
   const caption = `${eventText(event, 'final_confirmed').trim()}\n\nРезервный код: ${checkinToken.slice(0, 8).toUpperCase()}`;
@@ -957,6 +957,10 @@ app.post('/api/admin/applicants/:id/reject', adminOnly, async (req, res) => {
   })();
   setAudit(req, 'Отказал в приглашении', `${person.name} · ${person.title}`);
   res.json({ ok: true });
+});
+app.post('/api/admin/applicants/:id/reminder', adminOnly, async (req, res) => {
+  try { await sendReminder(Number(req.params.id)); setAudit(req, 'Отправил напоминание и QR', `Гость #${req.params.id}`); res.json({ ok: true }); }
+  catch (error) { res.status(400).json({ error: error.message }); }
 });
 app.patch('/api/admin/applicants/:id/name', adminOnly, (req, res) => {
   const name = String(req.body.name || '').trim().replace(/\s+/g, ' ');
