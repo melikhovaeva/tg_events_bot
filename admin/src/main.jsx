@@ -2222,7 +2222,7 @@ function guestStatusLabel(person) {
   if (person.blocked) return "Доступ ограничен";
   if (person.checked_in_at) return "Пришёл";
   if (person.invitation_status === "confirmed" && person.venue_response === "pending") return "Обновление площадки отправлено · ждём ответа";
-  if (person.invitation_status === "confirmed" && person.venue_response === "confirmed") return "Подтвердил новую площадку";
+  if (person.invitation_status === "confirmed" && person.venue_response === "confirmed") return "Участие подтверждено";
   if (person.invitation_status === "declined" && person.venue_response === "declined") return "Отказался от новой площадки";
   if (person.invitation_status === "confirmed" && person.reminder_sent_at && !person.final_confirmed_at) return "Ждём финального ответа";
   if (person.invitation_status === "confirmed" && person.final_confirmed_at) return "Участие подтверждено";
@@ -2877,7 +2877,7 @@ function App() {
                 </Button>
               </div>
             </div>
-            <div className="event-metrics mt-7 flex gap-3 overflow-x-auto pb-2 md:grid md:grid-cols-5 md:overflow-visible">
+            <div className="event-metrics mt-7 flex gap-3 overflow-x-auto pb-2 md:grid md:grid-cols-4 md:overflow-visible">
               <Stat
                 label="зарегистрировалось"
                 value={count(event.registered)}
@@ -2890,7 +2890,6 @@ function App() {
                 className="min-w-36 shrink-0"
               />
               <Stat label="пришли" value={count(event.checked_in)} className="min-w-36 shrink-0" />
-              <Stat label="подтвердили новую площадку" value={count(event.venue_confirmed)} className="min-w-36 shrink-0" />
             </div>
             {!event.registration_open && (
               <p className="mt-4 rounded-md border bg-muted/40 px-3 py-2 text-sm">
