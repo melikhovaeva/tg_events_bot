@@ -156,6 +156,18 @@ for (const [table, column, definition] of [
   try { db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`); } catch { /* already exists */ }
 }
 
+// Backfill the one venue-update preview actually delivered before delivery
+// tracking existed. Do not mark other guests: no campaign has been sent yet.
+try {
+  db.exec('ALTER TABLE invitations ADD COLUMN venue_update_sent INTEGER NOT NULL DEFAULT 0');
+  db.prepare(`UPDATE invitations SET venue_update_sent=1,
+    venue_response=COALESCE(venue_response, 'pending')
+    WHERE applicant_id IN (SELECT id FROM applicants WHERE event_id=2 AND telegram_id=?)`)
+    .run('1626422277');
+} catch (error) {
+  if (!/duplicate column name/i.test(error.message)) throw error;
+}
+
 // Before this status existed, an unanswered final confirmation was saved as a
 // regular decline. A real decline always has responded_at, so this restores
 // the distinction for existing guests as well.

@@ -2221,6 +2221,7 @@ function TeamSettings({ currentUser, users, events, auditLog, auditHasMore, onCh
 function guestStatusLabel(person) {
   if (person.blocked) return "Доступ ограничен";
   if (person.checked_in_at) return "Пришёл";
+  if (person.invitation_status === "confirmed" && person.venue_response === "pending") return "Обновление площадки отправлено · ждём ответа";
   if (person.invitation_status === "confirmed" && person.venue_response === "confirmed") return "Подтвердил новую площадку";
   if (person.invitation_status === "declined" && person.venue_response === "declined") return "Отказался от новой площадки";
   if (person.invitation_status === "confirmed" && person.reminder_sent_at && !person.final_confirmed_at) return "Ждём финального ответа";
@@ -2232,7 +2233,7 @@ function guestStatus(person) {
   const status = person.invitation_status || person.status;
   const tone = person.blocked ? "error"
     : person.checked_in_at ? "attended"
-    : status === "confirmed" ? (person.reminder_sent_at && !person.final_confirmed_at ? "waiting" : "success")
+    : status === "confirmed" ? (person.venue_response === "pending" || (person.reminder_sent_at && !person.final_confirmed_at) ? "waiting" : "success")
     : ["pending", "invited", "expired", "final_expired"].includes(status) ? "waiting"
     : ["delivery_failed", "bot_blocked", "rejected"].includes(status) ? "error"
     : ["declined", "cancelled"].includes(status) ? "inactive"
