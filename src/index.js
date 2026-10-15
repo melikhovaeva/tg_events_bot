@@ -399,7 +399,7 @@ async function requestProfile(ctx, continuation = '') {
   const telegramId = String(ctx.from.id);
   db.prepare(`INSERT INTO profile_drafts (telegram_id,continuation,stage,name,phone) VALUES (?,?,'name',NULL,NULL)
     ON CONFLICT(telegram_id) DO UPDATE SET continuation=excluded.continuation,stage='name',name=NULL,phone=NULL`).run(telegramId, continuation || '');
-  return ctx.reply('Давайте познакомимся! Сохраним ваши данные, чтобы использовать их для будущих заявок на мероприятия Perasperadastra.\n\nШаг 1 из 3. Напишите полное ФИО: фамилию, имя и отчество, если есть.', { reply_markup: { remove_keyboard: true } });
+  return ctx.reply('<b>Давайте познакомимся!</b>\n\nМы сохраним ваши данные, чтобы передать их площадке для оформления списков участников.\n\nВ дальнейшем при регистрации на мероприятия <b>Perasperadastra</b> вам не придётся вводить эту информацию заново — она сохранится в боте.\n\n<b>Шаг 1 из 3.</b>\nНапишите полное ФИО: фамилию, имя и отчество, если есть.', messageOptions({ reply_markup: { remove_keyboard: true } }));
 }
 async function requestSchoolStatus(ctx, continuation, profile) {
   const telegramId = String(ctx.from.id);
