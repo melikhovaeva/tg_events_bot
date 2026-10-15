@@ -1134,7 +1134,12 @@ app.get('/api/admin/dialogs/:telegramId', adminOnly, (req, res) => {
   if (!conversation) return res.sendStatus(404);
   db.prepare('UPDATE conversations SET unread_count=0,support_unread_count=0 WHERE telegram_id=? AND (unread_count>0 OR support_unread_count>0)').run(conversation.telegram_id);
   const messages = db.prepare('SELECT * FROM conversation_messages WHERE telegram_id=? ORDER BY id').all(conversation.telegram_id);
-  res.json({ conversation: { ...conversation, unread_count: 0 }, messages });
+  const registrations = db.prepare(`SELECT a.event_id,a.status,e.title AS event_title,
+    i.status AS invitation_status,i.final_confirmed_at,i.reminder_sent_at,i.checked_in_at,i.venue_response,
+    EXISTS(SELECT 1 FROM blocked_users b WHERE b.telegram_id=a.telegram_id) AS blocked
+    FROM applicants a JOIN events e ON e.id=a.event_id LEFT JOIN invitations i ON i.applicant_id=a.id
+    WHERE a.telegram_id=? ORDER BY e.starts_at DESC,a.id DESC`).all(conversation.telegram_id);
+  res.json({ conversation: { ...conversation, registrations, unread_count: 0, support_unread_count: 0 }, messages });
 });
 app.post('/api/admin/dialogs/:telegramId/reply', adminOnly, async (req, res) => {
   const conversation = db.prepare('SELECT * FROM conversations WHERE telegram_id=?').get(req.params.telegramId);
