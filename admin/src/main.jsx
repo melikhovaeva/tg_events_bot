@@ -1808,8 +1808,9 @@ function Dialogs({
               </div>
             ) : (
               <>
-                <div className="shrink-0 border-b px-5 py-3">
-                  <b>
+                <div className="flex shrink-0 flex-wrap items-start justify-between gap-x-6 gap-y-3 border-b px-5 py-3">
+                  <div className="min-w-0 flex-1 basis-56">
+                  <b className="break-words">
                     {conversation.person_name || (conversation.telegram_name
                       ? `@${conversation.telegram_name}`
                       : `Telegram ${conversation.telegram_id}`)}
@@ -1824,8 +1825,9 @@ function Dialogs({
                   <p className="mt-0.5 text-xs text-muted-foreground">
                     Ответ будет отправлен в личный чат с ботом.
                   </p>
+                  </div>
                   {conversation.registrations?.length > 0 && (
-                    <div className="mt-2 flex flex-wrap gap-2">
+                    <div className="ml-auto flex max-w-full flex-wrap justify-end gap-2">
                       {conversation.registrations.map((registration) => (
                         <a key={registration.event_id} href={`/admin/?page=detail&event=${registration.event_id}`} className="flex max-w-full flex-wrap items-center gap-2 rounded-md border px-2 py-1 text-xs hover:bg-muted">
                           <span className="min-w-0 break-words">{registration.event_title}</span>
