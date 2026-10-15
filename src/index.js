@@ -349,9 +349,10 @@ const { runAutomation, sendSchedule, sendReminder, sendAssets, sendInvite, sendM
 async function sendCheckinQr(ctx, row, checkinToken, qr) {
   const event = db.prepare('SELECT * FROM events WHERE id=?').get(row.event_id);
   const caption = `${eventText(event, 'final_confirmed').trim()}\n\nРезервный код: ${checkinToken.slice(0, 8).toUpperCase()}`;
-  if (caption.length <= 1024) await ctx.replyWithPhoto(new InputFile(qr, 'checkin.png'), messageOptions({ caption }));
+  const keyboard = new InlineKeyboard().text('Отменить регистрацию', `withdraw:${row.applicant_id}`).style('danger');
+  if (caption.length <= 1024) await ctx.replyWithPhoto(new InputFile(qr, 'checkin.png'), messageOptions({ caption, reply_markup: keyboard }));
   else {
-    await ctx.replyWithPhoto(new InputFile(qr, 'checkin.png'));
+    await ctx.replyWithPhoto(new InputFile(qr, 'checkin.png'), { reply_markup: keyboard });
     await ctx.reply(caption, messageOptions());
   }
   await sendMessageImages(row.telegram_id, row.event_id, 'final_confirmed');
@@ -1083,8 +1084,9 @@ app.post('/api/admin/events/:id/direct-invitations', adminOnly, async (req, res)
       const qr = await QRCode.toBuffer(checkinToken, { width: 900, margin: 4, errorCorrectionLevel: 'H' });
       await sendSchedule(person.telegram_id, event);
       const caption = `${eventText(event, 'final_confirmed').trim()}\n\nРезервный код: ${checkinToken.slice(0, 8).toUpperCase()}`;
-      if (caption.length <= 1024) await bot.api.sendPhoto(person.telegram_id, new InputFile(qr, 'checkin.png'), { caption, parse_mode: 'HTML' });
-      else { await bot.api.sendPhoto(person.telegram_id, new InputFile(qr, 'checkin.png')); await bot.api.sendMessage(person.telegram_id, caption, messageOptions()); }
+      const keyboard = new InlineKeyboard().text('Отменить регистрацию', `withdraw:${id}`).style('danger');
+      if (caption.length <= 1024) await bot.api.sendPhoto(person.telegram_id, new InputFile(qr, 'checkin.png'), messageOptions({ caption, reply_markup: keyboard }));
+      else { await bot.api.sendPhoto(person.telegram_id, new InputFile(qr, 'checkin.png'), { reply_markup: keyboard }); await bot.api.sendMessage(person.telegram_id, caption, messageOptions()); }
       const at = nowIso();
       db.transaction(() => {
         db.prepare(`INSERT INTO invitations (applicant_id,status,expires_at,responded_at,final_confirmed_at,checkin_token) VALUES (?,'confirmed',?,?,?,?)

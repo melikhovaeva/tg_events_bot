@@ -64,8 +64,8 @@ export function createInvitationService({ db, bot }) {
     const caption = `${eventText(event, 'final_confirmed').trim()}\n\nРезервный код: ${checkinToken.slice(0, 8).toUpperCase()}`;
     if (caption.length <= 1024) await bot.api.sendPhoto(row.telegram_id, new InputFile(qr, 'checkin.png'), messageOptions({ caption, reply_markup: keyboard }));
     else {
-      await bot.api.sendPhoto(row.telegram_id, new InputFile(qr, 'checkin.png'));
-      await bot.api.sendMessage(row.telegram_id, caption, messageOptions({ reply_markup: keyboard }));
+      await bot.api.sendPhoto(row.telegram_id, new InputFile(qr, 'checkin.png'), { reply_markup: keyboard });
+      await bot.api.sendMessage(row.telegram_id, caption, messageOptions());
     }
     db.prepare('UPDATE invitations SET reminder_sent_at=?,final_confirmed_at=COALESCE(final_confirmed_at,?),final_expires_at=NULL,checkin_token=? WHERE id=?').run(nowIso(), nowIso(), checkinToken, row.id);
     await sendAssets(row.telegram_id, row.event_id, 'reminder');
