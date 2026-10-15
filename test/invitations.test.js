@@ -103,3 +103,12 @@ test('daily reminder sends QR and cancellation without another confirmation, onl
   assert.equal(calls.at(-1)[2].reply_markup.inline_keyboard[0][0].callback_data,'cancel:1');
   const count=calls.length; await service.runAutomation(); assert.equal(calls.length,count);
 });
+
+test('manual confirmation schedule uses reminder editor text without action buttons', async () => {
+  const { db, calls, service } = setup();
+  const event = db.prepare('SELECT * FROM events WHERE id=1').get();
+  await service.sendSchedule('100', event);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][1], event.reminder_text);
+  assert.equal(calls[0][2].reply_markup, undefined);
+});

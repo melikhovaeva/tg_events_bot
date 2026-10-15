@@ -47,6 +47,11 @@ export function createInvitationService({ db, bot }) {
     }
   }
 
+  async function sendSchedule(telegramId, event) {
+    const images = db.prepare('SELECT * FROM event_message_images WHERE event_id=? AND message_key=? ORDER BY position').all(event.id, 'reminder');
+    await sendMediaMessage(bot.api, telegramId, eventText(event, 'reminder'), images);
+  }
+
   async function sendReminder(applicantId) {
     const row = db.prepare(`SELECT i.*, a.telegram_id, a.event_id FROM invitations i JOIN applicants a ON a.id=i.applicant_id WHERE a.id=?`).get(applicantId);
     if (!row || !row.telegram_id || row.status !== 'confirmed' || row.venue_response === 'pending') throw new Error('Участие гостя не подтверждено');
@@ -55,8 +60,7 @@ export function createInvitationService({ db, bot }) {
     const checkinToken = row.checkin_token || token();
     const qr = await QRCode.toBuffer(checkinToken, { width: 900, margin: 4, errorCorrectionLevel: 'H' });
     const keyboard = new InlineKeyboard().text('Отменить регистрацию', `cancel:${row.id}`).style('danger');
-    const images = db.prepare('SELECT * FROM event_message_images WHERE event_id=? AND message_key=? ORDER BY position').all(row.event_id, 'reminder');
-    await sendMediaMessage(bot.api, row.telegram_id, eventText(event, 'reminder'), images);
+    await sendSchedule(row.telegram_id, event);
     const caption = `${eventText(event, 'final_confirmed').trim()}\n\nРезервный код: ${checkinToken.slice(0, 8).toUpperCase()}`;
     if (caption.length <= 1024) await bot.api.sendPhoto(row.telegram_id, new InputFile(qr, 'checkin.png'), messageOptions({ caption, reply_markup: keyboard }));
     else {
@@ -80,5 +84,5 @@ export function createInvitationService({ db, bot }) {
     }
   }
 
-  return { sendReminder, runAutomation, sendAssets, sendInvite, sendMessageImages, updateInviteAttempt };
+  return { sendSchedule, sendReminder, runAutomation, sendAssets, sendInvite, sendMessageImages, updateInviteAttempt };
 }

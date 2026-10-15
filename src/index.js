@@ -345,7 +345,7 @@ bot.use(async (ctx, next) => {
   return next();
 });
 const botEnabled = Boolean(process.env.BOT_TOKEN) && process.env.BOT_ENABLED !== 'false';
-const { runAutomation, sendReminder, sendAssets, sendInvite, sendMessageImages, updateInviteAttempt } = createInvitationService({ db, bot });
+const { runAutomation, sendSchedule, sendReminder, sendAssets, sendInvite, sendMessageImages, updateInviteAttempt } = createInvitationService({ db, bot });
 async function sendCheckinQr(ctx, row, checkinToken, qr) {
   const event = db.prepare('SELECT * FROM events WHERE id=?').get(row.event_id);
   const caption = `${eventText(event, 'final_confirmed').trim()}\n\nРезервный код: ${checkinToken.slice(0, 8).toUpperCase()}`;
@@ -1081,6 +1081,7 @@ app.post('/api/admin/events/:id/direct-invitations', adminOnly, async (req, res)
     const checkinToken = alreadyConfirmed && previous.checkin_token ? previous.checkin_token : token();
     try {
       const qr = await QRCode.toBuffer(checkinToken, { width: 900, margin: 4, errorCorrectionLevel: 'H' });
+      await sendSchedule(person.telegram_id, event);
       const caption = `${eventText(event, 'final_confirmed').trim()}\n\nРезервный код: ${checkinToken.slice(0, 8).toUpperCase()}`;
       if (caption.length <= 1024) await bot.api.sendPhoto(person.telegram_id, new InputFile(qr, 'checkin.png'), { caption, parse_mode: 'HTML' });
       else { await bot.api.sendPhoto(person.telegram_id, new InputFile(qr, 'checkin.png')); await bot.api.sendMessage(person.telegram_id, caption, messageOptions()); }
@@ -1090,8 +1091,10 @@ app.post('/api/admin/events/:id/direct-invitations', adminOnly, async (req, res)
           ON CONFLICT(applicant_id) DO UPDATE SET status='confirmed',responded_at=excluded.responded_at,final_confirmed_at=excluded.final_confirmed_at,checkin_token=excluded.checkin_token,final_expires_at=NULL`)
           .run(id, at, at, alreadyConfirmed ? previous.final_confirmed_at : at, checkinToken);
         db.prepare("UPDATE applicants SET status='confirmed' WHERE id=?").run(id);
+        db.prepare('UPDATE invitations SET reminder_sent_at=? WHERE applicant_id=?').run(at, id);
       })();
       sent.push(id);
+      await sendAssets(person.telegram_id, event.id, 'reminder');
       await sendMessageImages(person.telegram_id, event.id, 'final_confirmed');
     } catch (error) { skipped.push({ id, reason: error.description || error.message }); }
   }
