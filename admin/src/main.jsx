@@ -1776,6 +1776,13 @@ function Dialogs({
                           : `Telegram ${item.telegram_id}`}
                       </p>
                     )}
+                    {item.registrations?.length > 0 && (
+                      <div className="mt-2 flex min-w-0 flex-col items-start gap-1">
+                        <span className="max-w-full truncate text-xs text-muted-foreground" title={item.registrations[0].event_title}>{item.registrations[0].event_title}</span>
+                        {guestStatus(item.registrations[0])}
+                        {item.registrations.length > 1 && <span className="text-xs text-muted-foreground">Ещё событий: {item.registrations.length - 1}</span>}
+                      </div>
+                    )}
                     <p className={`mt-1 truncate text-sm ${count(item.support_unread_count) > 0 ? "font-medium text-red-800" : count(item.unread_count) > 0 ? "font-medium text-blue-800" : "text-muted-foreground"}`}>
                       {plainText(item.last_message) || "Диалог ещё не начат"}
                     </p>
@@ -1817,6 +1824,16 @@ function Dialogs({
                   <p className="mt-0.5 text-xs text-muted-foreground">
                     Ответ будет отправлен в личный чат с ботом.
                   </p>
+                  {conversation.registrations?.length > 0 && (
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {conversation.registrations.map((registration) => (
+                        <a key={registration.event_id} href={`/admin/?page=detail&event=${registration.event_id}`} className="flex max-w-full flex-wrap items-center gap-2 rounded-md border px-2 py-1 text-xs hover:bg-muted">
+                          <span className="min-w-0 break-words">{registration.event_title}</span>
+                          {guestStatus(registration)}
+                        </a>
+                      ))}
+                    </div>
+                  )}
                 </div>
                 <div className="relative min-h-0 flex-1">
                 <div ref={messagesRef} className="flex h-full min-h-0 flex-col gap-3 overflow-y-auto overscroll-contain bg-muted/20 p-4 pb-16 sm:p-5 sm:pb-16 [&>div]:shrink-0">

@@ -794,6 +794,18 @@ app.get('/api/admin/state', adminOnly, (req, res) => {
     LEFT JOIN telegram_profiles p ON p.telegram_id=c.telegram_id
     LEFT JOIN applicants a ON a.id=(SELECT recent.id FROM applicants recent WHERE recent.telegram_id=c.telegram_id ORDER BY recent.created_at DESC, recent.id DESC LIMIT 1)
     ORDER BY c.last_message_at DESC`).all();
+  if (req.adminUser.role !== 'assistant') {
+    const registrationsByUser = new Map();
+    for (const registration of db.prepare(`SELECT a.telegram_id,a.event_id,a.status,e.title AS event_title,
+      i.status AS invitation_status,i.final_confirmed_at,i.reminder_sent_at,i.checked_in_at,i.venue_response,
+      EXISTS(SELECT 1 FROM blocked_users b WHERE b.telegram_id=a.telegram_id) AS blocked
+      FROM applicants a JOIN events e ON e.id=a.event_id LEFT JOIN invitations i ON i.applicant_id=a.id
+      WHERE a.telegram_id IS NOT NULL ORDER BY e.starts_at DESC,a.id DESC`).all()) {
+      if (!registrationsByUser.has(registration.telegram_id)) registrationsByUser.set(registration.telegram_id, []);
+      registrationsByUser.get(registration.telegram_id).push(registration);
+    }
+    for (const conversation of conversations) conversation.registrations = registrationsByUser.get(conversation.telegram_id) || [];
+  }
   const postRecipients = req.adminUser.role === 'assistant' ? [] : db.prepare('SELECT post_id,telegram_id FROM post_recipients').all();
   const postSendSummaries = req.adminUser.role === 'assistant' ? [] : db.prepare(`SELECT s.* FROM post_sends s
     JOIN (SELECT post_id, MAX(id) AS id FROM post_sends GROUP BY post_id) latest ON latest.id=s.id`).all();
