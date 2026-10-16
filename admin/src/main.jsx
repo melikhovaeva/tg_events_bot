@@ -1844,9 +1844,9 @@ function Dialogs({
                       key={message.id}
                       className={`max-w-[84%] rounded-lg px-3 py-2 text-sm leading-6 ${message.direction === "out" ? "self-end bg-foreground text-background" : "self-start border bg-background"}`}
                     >
-                      <p className="whitespace-pre-wrap">
-                        {plainText(message.text)}
-                      </p>
+                      {message.formatted_html ? (
+                        <div className="whitespace-pre-wrap break-words [&_a]:text-blue-600 [&_a]:underline [&_pre]:overflow-x-auto [&_blockquote]:border-l-2 [&_blockquote]:pl-3" dangerouslySetInnerHTML={{ __html: message.formatted_html }} />
+                      ) : <p className="whitespace-pre-wrap">{plainText(message.text)}</p>}
                       <p
                         className={`mt-1 text-[11px] ${message.direction === "out" ? "text-background/60" : "text-muted-foreground"}`}
                       >

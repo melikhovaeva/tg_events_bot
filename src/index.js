@@ -20,6 +20,7 @@ import { guestWorkbook } from './lib/guest-export.js';
 import { profileNameError } from './lib/profile-name.js';
 import { sendVenueUpdate, venueUpdateRecipients } from './services/venue-update.js';
 import { sendTicketUpdate, ticketRecipients } from './services/ticket-update.js';
+import { telegramMessageSnapshot, telegramMessageHtml } from './lib/telegram-message.js';
 
 validateConfig();
 
@@ -143,6 +144,8 @@ for (const [table, column, definition] of [
   ['events', 'expired_text', 'TEXT'], ['invitations', 'final_confirmed_at', 'TEXT'], ['invitations', 'final_expires_at', 'TEXT'],
   ['events', 'final_confirmed_text', 'TEXT'], ['events', 'final_declined_text', 'TEXT'],
   ['invitations', 'venue_response', 'TEXT'],
+  ['conversation_messages', 'telegram_message', 'TEXT'],
+  ['conversation_messages', 'formatted_html', 'TEXT'],
   ['events', 'cover_stored_name', 'TEXT'], ['events', 'cover_original_name', 'TEXT'],
   ['events', 'registration_open', 'INTEGER NOT NULL DEFAULT 1'],
   ['applicants', 'was_school_student', 'INTEGER'],
@@ -197,9 +200,10 @@ const userStatus = {
   declined: 'участие отменено', rejected: 'организатор пока не может пригласить вас', expired: 'ответ не получен',
   final_expired: 'финальное подтверждение не получено', cancelled: 'регистрация отменена',
 };
-function recordConversationMessage(telegramId, telegramName, direction, text, support = false) {
+function recordConversationMessage(telegramId, telegramName, direction, text, support = false, sourceMessage = null) {
   const createdAt = nowIso();
-  db.prepare('INSERT INTO conversation_messages (telegram_id,direction,text,created_at) VALUES (?,?,?,?)').run(telegramId, direction, text, createdAt);
+  db.prepare('INSERT INTO conversation_messages (telegram_id,direction,text,created_at,telegram_message,formatted_html) VALUES (?,?,?,?,?,?)')
+    .run(telegramId, direction, text, createdAt, sourceMessage ? JSON.stringify(telegramMessageSnapshot(sourceMessage)) : null, sourceMessage ? telegramMessageHtml(sourceMessage) : null);
   const unreadCount = direction === 'in' ? 1 : 0;
   db.prepare(`INSERT INTO conversations (telegram_id,telegram_name,last_message,last_message_at,unread_count) VALUES (?,?,?,?,?)
     ON CONFLICT(telegram_id) DO UPDATE SET telegram_name=COALESCE(excluded.telegram_name, conversations.telegram_name),last_message=excluded.last_message,last_message_at=excluded.last_message_at,unread_count=${direction === 'in' ? 'conversations.unread_count+1' : 'conversations.unread_count'}`)
@@ -398,7 +402,7 @@ bot.use(async (ctx, next) => {
     const text = message.text || message.caption || (message.contact ? '📱 Отправил номер телефона' : message.photo ? '🖼 Отправил изображение' : message.document ? '📎 Отправил файл' : null);
     const support = Boolean(db.prepare('SELECT 1 FROM support_drafts WHERE telegram_id=?').get(telegramId))
       && !['Написать организатору', 'Мероприятия', 'Мои регистрации'].includes(text) && !text?.startsWith('/');
-    if (text) recordConversationMessage(telegramId, ctx.from?.username || null, 'in', text, support);
+    if (text) recordConversationMessage(telegramId, ctx.from?.username || null, 'in', text, support, message);
   }
   return next();
 });
