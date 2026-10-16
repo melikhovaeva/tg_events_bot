@@ -2551,6 +2551,16 @@ function App() {
         await load(event.id);
       },
     });
+  const sendTicketUpdate = async () => {
+    const preview=await (await request(`/api/admin/events/${event.id}/ticket-update`)).json();
+    setConfirm({title:`Отправить инструкцию покупки билетов ${preview.count} гостям?`,
+      description:'Только подтвердившим участие 17.10. Сообщение о покупке билета на сеанс 10:00 и ссылка на чат. Повторно получившим эту рассылку не отправится.',
+      confirmLabel:'Отправить инструкцию',action:async()=>{
+        const result=await (await request(`/api/admin/events/${event.id}/ticket-update`,{method:'POST'})).json();
+        setBulkNotice(`Инструкция покупки билетов отправлена: ${result.sent.length}. Ошибок: ${result.failed.length}. ${result.failed.map(item=>item.reason).join('; ')}`);
+        await load(event.id);
+      }});
+  };
   const sendVenueUpdate = async () => {
     const preview = await (await request(`/api/admin/events/${event.id}/venue-update`)).json();
     setConfirm({
@@ -2936,6 +2946,7 @@ function App() {
                   <CardTitle>Заявки</CardTitle>
                   <div className="flex items-center gap-2">
                     {event.id === 2 && <Button variant="outline" size="sm" onClick={sendVenueUpdate}>Смена площадки · первично подтвердившим</Button>}
+                    {event.id === 2 && <Button variant="outline" size="sm" onClick={sendTicketUpdate}>Где купить билеты · подтвердившим</Button>}
                     {selectedApplicants.length === 1 && <Button variant="outline" size="sm" onClick={testReminder}>Напоминание и QR</Button>}
                     <Button
                       variant="outline"

@@ -19,6 +19,7 @@ import { parseEventTime } from './lib/event-time.js';
 import { guestWorkbook } from './lib/guest-export.js';
 import { profileNameError } from './lib/profile-name.js';
 import { sendVenueUpdate, venueUpdateRecipients } from './services/venue-update.js';
+import { sendTicketUpdate, ticketRecipients } from './services/ticket-update.js';
 
 validateConfig();
 
@@ -168,6 +169,12 @@ try {
 } catch (error) {
   if (!/duplicate column name/i.test(error.message)) throw error;
 }
+
+db.exec(`CREATE TABLE IF NOT EXISTS ticket_update_deliveries (
+  event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+  telegram_id TEXT NOT NULL,message_id INTEGER NOT NULL,
+  sent_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,PRIMARY KEY(event_id,telegram_id)
+)`);
 
 // Before this status existed, an unanswered final confirmation was saved as a
 // regular decline. A real decline always has responded_at, so this restores
@@ -1014,6 +1021,21 @@ app.post('/api/admin/events/:id/invitations', adminOnly, async (req, res) => {
   }
   setAudit(req, 'Отправил приглашения', `Мероприятие #${event.id} · доставлено: ${sent.length}, не доставлено: ${skipped.length}`);
   res.json({ ok: true, sent, skipped });
+});
+let ticketSending=false;
+app.get('/api/admin/events/:id/ticket-update', adminOnly, (req,res) => {
+  if(Number(req.params.id)!==2) return res.sendStatus(400);
+  res.json({count:ticketRecipients(db,2).length});
+});
+app.post('/api/admin/events/:id/ticket-update', adminOnly, async (req,res) => {
+  if(Number(req.params.id)!==2) return res.sendStatus(400);
+  if(ticketSending) return res.status(409).json({error:'Рассылка уже выполняется'});
+  ticketSending=true;
+  try {
+    const result=await sendTicketUpdate(db,bot.api,2);
+    setAudit(req,'Отправил инструкцию покупки билетов',`Лекторий 17.10 · доставлено: ${result.sent.length}, ошибок: ${result.failed.length}`);
+    res.json(result);
+  } finally {ticketSending=false;}
 });
 app.get('/api/admin/events/:id/venue-update', adminOnly, (req, res) => {
   if (Number(req.params.id) !== 2) return res.status(400).json({ error: 'Обновление относится только к лекторию 17.10' });
